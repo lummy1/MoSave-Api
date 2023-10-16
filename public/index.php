@@ -2,7 +2,7 @@
 
 ini_set('display_errors', 'Off');
 
-use App\Models\DB;
+use App\Models\Db;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use Selective\BasePath\BasePathMiddleware;
@@ -45,6 +45,9 @@ $app->get('/', function (Request $request, Response $response) {
 $app->put(
     '/customers-data/update/{id}',
     function (Request $request, Response $response, array $args) {
+
+        $params = $request->getQueryParams();
+       // var_dump($params);
         $id = $request->getAttribute('id');
         $data = $request->getParsedBody();
         $name = $data['name'];
@@ -66,7 +69,11 @@ $app->post('/confirm/jwt/test', function (Request $req, Response $res) {
     $response = array();
     $conn = new Db();
     $db = $conn->connect();
-
+    $data = $req->getParsedBody();
+    $firstname = $data["firstname"];
+    $bvn = $data["bvn"];
+    $phoneno = $data["phoneno"];
+    $lastname = $data["lastname"];
 
     $jwt = null;
     $authHeader = $_SERVER['HTTP_AUTHORIZATION'];
@@ -78,7 +85,16 @@ $app->post('/confirm/jwt/test', function (Request $req, Response $res) {
     $jwt = $arr[1];
     $result = validateJWT($jwt);
 
-    if ($result['validate_flag'] == 1) {
+    if ($result['validate_flag'] != 1) {
+       
+        $res->getBody()->write(json_encode($result));
+            return $res
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(401);
+    } else {
+        
+    
+
         try {
 
             $token_email = $result['token_value']->data->email;
@@ -94,11 +110,372 @@ $app->post('/confirm/jwt/test', function (Request $req, Response $res) {
         } catch (PDOException $e) {
             $response['error']   = true;
             $response['message'] = $e->getMessage();
-            echo json_encode($response);
+            $res->getBody()->write(json_encode($response));
+            return $res
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(500);
         }
-    } else {
-        echo json_encode($result);
     }
+});
+
+$app->post('/db/test', function (Request $req, Response $response) {
+    //print_r($_ENV);
+
+    $conn = new Db();
+    $db = $conn->connect();
+    $res = $_ENV['JWT_SECRET_KEY'];
+    //echo $_SERVER['NAME'] . "\n";
+
+    $docRoot = __DIR__;
+    $newdir = dirname(__DIR__, 1);
+    //$newdir = "../".$docRoot;
+
+    $co = "SELECT bank_code FROM bank_settings";
+    $conn = new Db();
+    $db = $conn->connect();
+
+    $cons = $db->prepare($co);
+    $cons->execute();
+
+    $resulta = $cons->fetch();
+
+
+    $response->getBody()->write(json_encode($resulta));
+    return $response
+    ->withHeader('content-type', 'application/json')
+    ->withStatus(401);
+});
+
+$app->post('/customer/wallettransfer', function (Request $req, Response $res) {
+
+    
+    $response = array();
+    $conn = new Db();
+    $db = $conn->connect();
+    $data = $req->getParsedBody();
+    $senderwallet = $data["senderwallet"]; //e.g LOY, SAV, TIC
+    $planId = $data["saving_plan_id"];  
+    $accountId = $data["saving_account_id"];   // if SAV, then this is required
+    $receiverwallet = $data["receiverwallet"];  //e.g LOY, SAV, TIC
+    $transAmount = $data["amount"];
+    $desc = $data["desc"];
+    
+    $jwt = null;
+    $authHeader = $_SERVER['HTTP_AUTHORIZATION'];
+
+    $arr = explode(" ", $authHeader);
+
+
+
+    $jwt = $arr[1];
+    $result = validateJWT($jwt);
+
+    if ($result['validate_flag'] != 1) {
+       
+        $res->getBody()->write(json_encode($result));
+            return $res
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(401);
+    } else {
+        
+    
+
+        try {
+
+            $token_email = $result['token_value']->data->email;
+            //echo $token_email;
+
+            $token_id = $result['token_value']->data->id;
+            //echo $token_id;
+
+            $token_userid = $result['token_value']->data->userId;
+            //echo $token_userid;
+
+
+            if($senderwallet==="SAV"){
+
+
+                $sqlsa = "SELECT  `account_code`, `account_name`, `minimum_bal`, `desc` FROM `mosave_account_type` WHERE sn=:actid";
+       
+                $stmtb = $db->prepare($sqlsa);  
+                $stmtb->bindParam("actid", $accountId);
+                
+                        $stmtb->execute();
+                        $resultsa = $stmtb->fetch();
+        
+                        //$response=$email;
+                         if(!$resultsa){
+         //$response['error']=true;
+                        $response['message']="Cannot find Customer account type";
+        
+        
+        }else{
+                       
+        $accountCode = $resultsa['account_code'];
+        $accountType = $resultsa['account_name'];
+        $bal = $resultsa['minimum_bal'];
+
+
+                $walletqrys="SELECT `account_bal` as wBalances FROM `mosave_wallet` WHERE  customerId=:custid and accountId=:actid ";
+   
+
+        $walstmts = $db->prepare($walletqrys);  
+        
+        $walstmts->bindParam(":custid", $customerId,PDO::PARAM_STR);
+         $walstmts->bindParam(":actid", $accountId,PDO::PARAM_STR); 
+        
+ $walstmts->execute();
+	 $reds = $walstmts->fetch();
+	 
+
+ $wallet_balances=$reds['wBalances'];
+
+ $walletqry="SELECT `available_bal` as wBalance, `account_bal`  FROM `mosave_plan_wallet` WHERE  customerId=:custid and accountId=:actid and plan_id=:pid ";
+   
+  
+        $walstmt = $db->prepare($walletqry);  
+        
+        $walstmt->bindParam(":custid", $customerId,PDO::PARAM_STR);
+         $walstmt->bindParam(":actid", $accountId,PDO::PARAM_STR); 
+         $walstmt->bindParam(":pid", $planId,PDO::PARAM_STR); 
+
+ $walstmt->execute();
+	 $red = $walstmt->fetch();
+	 
+
+ $wBalance=$red['wBalance'];
+  $account_bal=$red['account_bal'];
+
+
+  
+            $amts=$transAmount;
+            $amt=$transAmount*(-1); 
+                     $newBalance= $wBalance + $amt;  
+                      $newBalancecheck= $newBalance*(-1);  
+                      
+                    $mosave_wal=$wallet_balances- $transAmount;
+                    $ac_bal=$account_bal- $transAmount;
+                      // $response['t']=$newBalancecheck;
+                     //$response['n']=$newBalance;
+            //$response['j']=$bal;
+            
+            
+            
+            if($amts>$wBalance){
+            
+             $response['error']=true;
+                            $response['message']="Insufficient funds";
+                                               
+                           
+                         }
+            $available_bal=$newBalance-$bal;
+
+
+            $updwalqryplan="UPDATE `mosave_plan_wallet` SET `account_bal`=:ac_bal, `available_bal`=:newb  WHERE accountId=:actid and customerId=:custid and plan_id=:pid ";
+            
+            $walstmtplan = $db->prepare($updwalqryplan);  
+            $walstmtplan->bindParam(":ac_bal", $ac_bal,PDO::PARAM_STR);
+            $walstmtplan->bindParam(":newb", $newBalance,PDO::PARAM_STR); 
+            $walstmtplan->bindParam(":custid", $customerId,PDO::PARAM_STR);
+            $walstmtplan->bindParam(":actid", $accountId,PDO::PARAM_STR); 
+            $walstmtplan->bindParam(":pid", $planId,PDO::PARAM_STR); 
+            
+            $walstmtplan->execute();
+            
+                   $updwalqry="UPDATE `mosave_wallet` SET `account_bal`='$mosave_wal'  WHERE accountId=:actid and customerId=:custid ";
+           
+            $walstmt = $db->prepare($updwalqry);  
+            
+            $walstmt->bindParam(":custid", $customerId,PDO::PARAM_STR);
+            $walstmt->bindParam(":actid", $accountId,PDO::PARAM_STR);     
+            
+            $walstmt->execute();
+            
+             $trans_mode='CW';
+            
+               
+            $sql = "INSERT INTO `mosave_savingtransaction`(`customerId`, `agentId`,`accountId`, `planId`, `accountNo`, `transAmount`,`transType`,`transref`,
+            `accountType`, `accountCode`,`trans_mode`,  `transDate`,`time`,`ip`) VALUES (:customerId,:agentId,:actids,:pid,:accountNo,:transAmount,:transtype,:transref,:accountType,:accountCode,:trans_mode,:datecreated,:time,:ip)";
+            
+            
+            $stmt = $db->prepare($sql);  
+            
+            $stmt->bindParam(":customerId", $customerId,PDO::PARAM_STR);
+            $stmt->bindParam(":agentId", $agentId,PDO::PARAM_STR);
+            $stmt->bindParam(":actids", $accountId,PDO::PARAM_STR);
+            $stmt->bindParam(":pid", $planId,PDO::PARAM_STR);
+            $stmt->bindParam(":accountNo", $accountNo,PDO::PARAM_STR);
+            $stmt->bindParam(":transAmount", $transAmount,PDO::PARAM_STR);
+            $stmt->bindParam(":transtype", $transtype,PDO::PARAM_STR);
+            $stmt->bindParam(":transref", $refs,PDO::PARAM_STR);
+            $stmt->bindParam(":trans_mode", $trans_mode,PDO::PARAM_STR);
+            $stmt->bindParam(":accountType", $accountType,PDO::PARAM_STR);
+            $stmt->bindParam(":accountCode", $accountCode,PDO::PARAM_STR);
+            
+            
+            
+            
+            $stmt->bindParam(":datecreated", $dateCreated,PDO::PARAM_STR);
+            $stmt->bindParam(":time", $time,PDO::PARAM_STR);
+            $stmt->bindParam(":ip", $ip,PDO::PARAM_STR);
+            
+            //$stmt->execute();
+            $result=$stmt->execute();
+            //$result = $stmt->fetch();
+         }
+     }
+
+            if($senderwallet==="LOY"){
+
+
+            
+
+                        }
+
+
+        } catch (PDOException $e) {
+            $response['error']   = true;
+            $response['message'] = $e->getMessage();
+            $res->getBody()->write(json_encode($response));
+            return $res
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(500);
+        }
+    }
+});
+
+$app->post('/paystack/initialisetrans', function (Request $req, Response $res) {
+    $response = array();
+    $conn = new Db();
+    $db = $conn->connect();
+
+    $data = $req->getParsedBody();
+    $amount = $data["amount"];
+    $currency = $data["currency"];
+    $save_card = $data["save_card"];
+
+    $refs= getTransactionRef();
+    $jwt = null;
+    $authHeader = $_SERVER['HTTP_AUTHORIZATION'];
+
+    $arr = explode(" ", $authHeader);
+
+
+
+    $jwt = $arr[1];
+    $result = validateJWT($jwt);
+
+    if ($result['validate_flag'] != 1) {
+       
+        $res->getBody()->write(json_encode($result));
+            return $res
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(401);
+    } else {
+        
+    
+
+        try {
+
+            $token_email = $result['token_value']->data->email;
+            //echo $token_email;
+
+            $token_id = $result['token_value']->data->id;
+            //echo $token_id;
+
+            $token_userid = $result['token_value']->data->userId;
+            //echo $token_userid;
+
+             $url = "https://api.paystack.co/transaction/initialize";
+
+             $paystack_secret_key = $_ENV['PAYSTACK_SECRET_KEY'];
+            $paystack_callback_url = 
+            $curl = curl_init();
+
+            $amt=intval($amount);
+
+           $fields=array(
+            "email" => $token_email,
+            "currency" => $currency,
+            "amount" => $amount,
+            "reference"=>$refs,
+            "callback_url"=> "https://moloyal.com/test/mosave/customerapi/paystack/callback",
+              );
+
+              $json_fields=json_encode($fields);
+            curl_setopt_array($curl, array(
+              CURLOPT_URL => $url,
+              CURLOPT_RETURNTRANSFER => true,
+              CURLOPT_ENCODING => '',
+              CURLOPT_MAXREDIRS => 10,
+              CURLOPT_TIMEOUT => 0,
+               CURLOPT_SSL_VERIFYPEER=> false,
+              CURLOPT_FOLLOWLOCATION => true,
+              CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+              CURLOPT_CUSTOMREQUEST => 'POST',
+              CURLOPT_POSTFIELDS => $json_fields,
+              CURLOPT_HTTPHEADER => array(
+                'Authorization: Bearer '.$paystack_secret_key,
+                'Content-Type: application/json'
+              ),
+            ));
+            
+            $resulta = curl_exec($curl);
+            
+            curl_close($curl);
+           //echo $response;
+            
+
+
+            
+                if($resulta === "false"){
+                    $dd= curl_error($curl);
+                    $res->getBody()->write(json_encode($dd));
+                    return $res
+                        ->withHeader('content-type', 'application/json')
+                        ->withStatus(401);
+                }else{
+                    if($save_card == 1){
+                    $kks=json_decode($resulta);
+                    $reference=$kks->data->reference;
+                    $accesscode=$kks->data->access_code;
+                    // $authorization_code =encrypt_decrypt('decrypt',$rs['authorization_code']);
+                    // $last4 =encrypt_decrypt('decrypt',$rs['last4']);
+
+                    $sqla = "INSERT INTO `recurring_payment`( `email_address`,  `reference`, `status`) VALUES
+                    (:email,:ref,0)";
+                                 
+              
+                                  $stmt = $db->prepare($sqla);
+                                  $stmt->bindParam(":email", $token_email, PDO::PARAM_STR);
+                                  $stmt->bindParam(":ref", $reference, PDO::PARAM_STR);
+                                    $rr= $stmt->execute();
+                    
+                                }
+
+
+            $res->getBody()->write($resulta);
+            return $res
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(200);
+        
+                }
+
+
+
+        }catch (PDOException $e) {
+            $response['error']   = true;
+            $response['message'] = $e->getMessage();
+            $res->getBody()->write(json_encode($response));
+            return $res
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(500);
+        }
+    
+    }
+    
+
+    
 });
 
 
@@ -109,61 +486,157 @@ $app->post('/paystack/callback', function (Request $req, Response $response) {
     // if ((strtoupper($_SERVER['REQUEST_METHOD']) != 'POST' ) || !array_key_exists('HTTP_X_PAYSTACK_SIGNATURE', $_SERVER) ) 
     // exit();
 
-// Retrieve the request's body
+    // Retrieve the request's body
 
-// $input = @file_get_contents("php://input");
-// define('PAYSTACK_SECRET_KEY','SECRET_KEY');
+    // $input = @file_get_contents("php://input");
+    // define('PAYSTACK_SECRET_KEY','SECRET_KEY');
 
-// validate event do all at once to avoid timing attack
+    // validate event do all at once to avoid timing attack
 
-// if($_SERVER['HTTP_X_PAYSTACK_SIGNATURE'] !== hash_hmac('sha512', $input, PAYSTACK_SECRET_KEY))
-//     exit();
-
-
-
-    $input = @file_get_contents("php://input");
-    $event = json_decode($input);
-    // Do something with $event
-    http_response_code(200); // PHP 5.4
-    
-$response->getBody()->write(json_encode($event));
-return $response
-    ->withHeader('content-type', 'application/json')
-    ->withStatus(401);
-
-    
-});
+    // if($_SERVER['HTTP_X_PAYSTACK_SIGNATURE'] !== hash_hmac('sha512', $input, PAYSTACK_SECRET_KEY))
+    //     exit();
 
 
-$app->post('/db/test', function (Request $req, Response $response) {
-    //print_r($_ENV);
+
+    // $input = @file_get_contents("php://input");
+    // $event = json_decode($input);
+    // // Do something with $event
+    // http_response_code(200); // PHP 5.4
+
+
+   
 
     $conn = new Db();
     $db = $conn->connect();
-   $res= $_ENV['JWT_SECRET_KEY'];
-//echo $_SERVER['NAME'] . "\n";
 
-$docRoot =__DIR__;
-$newdir = dirname(__DIR__, 1);
-//$newdir = "../".$docRoot;
+    try{
+        $paystack_secret_key = $_ENV['PAYSTACK_SECRET_KEY'];
+        $reference =$req->getQueryParams()['reference'] ?? null;
+         //$ref1= json_decode($params);
+         
+         //$ref=$ref1->reference;
+        
+         $curl = curl_init();
+          
+          curl_setopt_array($curl, array(
+            CURLOPT_URL => "https://api.paystack.co/transaction/verify/".$reference,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_ENCODING => "",
+            CURLOPT_MAXREDIRS => 10,
+            CURLOPT_TIMEOUT => 30,
+            CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+            CURLOPT_CUSTOMREQUEST => "GET",
+            CURLOPT_HTTPHEADER => array(
+              "Authorization: Bearer  $paystack_secret_key",
+              "Cache-Control: no-cache",
+            ),
+          ));
+          
+          $resp = curl_exec($curl);
+          $err = curl_error($curl);
+        
+          curl_close($curl);
+          
+          
+           if ($err) {
+             $response->getBody()->write(json_encode($err));
+            return $response
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(500);
+          } else {
 
-$co = "SELECT bank_code FROM bank_settings";
-            $conn = new Db();
-            $db = $conn->connect();
+            $check = json_decode($resp)->data->status;
+            if($check === "success"){
+            $refss = json_decode($resp)->data->reference;
+                //select email if available
+                //then update recurring_payment with authotisation
+                $customer_json_fields = json_decode($resp)->data->customer;
+                $cust_email= $customer_json_fields->email;
+               
+               
 
-            $cons = $db->prepare($co);
-            $cons->execute();
+                $sqlv = "SELECT * FROM `recurring_payment` WHERE `email_address`=: email and `reference`=: ref";
+                $stmta = $db->prepare($sqlv);
+                $stmta->bindParam(":email", $cust_email, PDO::PARAM_STR);
+                $stmta->bindParam(":ref", $refss, PDO::PARAM_STR);
 
-            $resulta = $cons->fetch();
+               
+                  $rra= $stmta->execute();
+
+                  $resultsa = $stmta->fetch();
+                  $num = $stmta->rowCount();
+
+                  if ($num > 0) {
+          
+                $json_fields = json_decode($resp)->data->authorization;
+                $auth_code= $json_fields->authorization_code;
+                   $bin= $json_fields->bin;
+                    $last4= $json_fields->last4;
+                     $exp_month= $json_fields->exp_month;
+                      $exp_year= $json_fields->exp_year;
+                       $channel= $json_fields->channel;
+                        $bank= $json_fields->bank;
+                        $country_code= $json_fields->country_code;
+                        $reusable= $json_fields->reusable;
+                        $signature= $json_fields->signature;
+                        $account_name= $json_fields->account_name;
 
 
-$response->getBody()->write(json_encode($resulta));
-return $response
-    ->withHeader('content-type', 'application/json')
-    ->withStatus(401);
+            $sqla = "UPDATE `recurring_payment` SET `authorization_code`=:authcode,
+            `card_type`=:cardtype,`last4`=:last4,`exp_month`=:expmonth,
+            `exp_year`=:expyr,`bin`=:bin,`bank`=:bank,
+            `channel`=:channel,`signature`=:signature,`reusable`=:reusable,
+            `country_code`=:countrycode,`status`='1'
+             WHERE `email_address`=:email and `reference`=:ref";
+                                 
+              
+                                  $stmt = $db->prepare($sqla);
+                                  $stmt->bindParam(":authcode", $auth_code, PDO::PARAM_STR);
+                                  $stmt->bindParam(":cardtype", $card_type, PDO::PARAM_STR);
+                                  $stmt->bindParam(":last4", $last4, PDO::PARAM_STR);
+                                  $stmt->bindParam(":expmonth", $exp_month, PDO::PARAM_STR);
+                                  $stmt->bindParam(":expyr", $exp_year, PDO::PARAM_STR);
+                                  $stmt->bindParam(":bin", $bin, PDO::PARAM_STR);
+                                  $stmt->bindParam(":bank", $bank, PDO::PARAM_STR);
+                                  $stmt->bindParam(":channel", $channel, PDO::PARAM_STR);
+                                  $stmt->bindParam(":signature", $signature, PDO::PARAM_STR);
+                                  $stmt->bindParam(":reusable", $reusable, PDO::PARAM_STR);
+                                         $stmt->bindParam(":country_code", $country_code, PDO::PARAM_STR);
+                                  $stmt->bindParam(":email", $email, PDO::PARAM_STR);
+                                  $stmt->bindParam(":ref", $reference, PDO::PARAM_STR);
+                                  $rr= $stmt->execute();
 
+
+            $response->getBody()->write(($resp));
+            return $response->withHeader('content-type', 'application/json')
+                        ->withStatus(200);
+        
+            
+          }else{
+            $response->getBody()->write('payment not validated');
+            return $response->withHeader('content-type', 'application/json')
+                        ->withStatus(301);
+
+          }
+        
+        }
+    }
+        } catch (PDOException $e) {
+            $res['error']   = true;
+            $res['message'] = $e->getMessage();
+            $response->getBody()->write(json_encode($res));
+            return $response
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(500);
+        }   
+            
+       
     
 });
+
+
+
+
 //customer register
 
 $app->post('/customer/register', function (Request $request, Response $response) {
@@ -1546,7 +2019,7 @@ $app->post('/customer/resetpass', function (Request $req, Response $res) {
     }
 });
 
-
+// customer savings plan
 $app->get('/customer/saving_plans', function (Request $request, Response $response) {
 
   
@@ -1623,6 +2096,77 @@ $app->get('/customer/saving_plans', function (Request $request, Response $respon
     }
 });
 
+
+//recurring card charge  with authorisation_code
+
+$app->post('/paystack/recuring_charge', function (Request $req, Response $res) {
+
+    $response = array();
+    $conn = new Db();
+    $db = $conn->connect();
+   
+    $data = $req->getParsedBody();
+    $amount = $data["amount"];
+   
+   
+
+    //get authorization_code, email from recurring_payment table for the same customer
+    $chargedata = array(
+        'authorization_code' => $card,
+        'email' => $email,
+         'reference' => $reference,
+        'amount' => $amount
+        );
+
+  
+
+
+
+
+   
+    
+
+        try {
+
+            //echo $token_userid;
+
+
+
+            $payload = json_encode($chargedata);
+            $ch = curl_init('https://api.paystack.co/transaction/charge_authorization');
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, array(
+            'accept: application/json',
+            'authorization: Bearer sk_live_283e8912e82f34b275a577b97659aec29bf778d1',
+           //'authorization: Bearer sk_test_feeb3d34498e46330086fe2a73b02692a05adda5',
+            'cache-control: no-cache',
+            'content-type: application/json',
+            'content-length: ' . strlen($payload))
+             );
+        
+            $result = curl_exec($ch);
+            
+           $t=json_decode($result);
+           
+           
+            $stat=$t->data->status;
+           $txref=$t->data->reference;
+           $gateresponse=$t->data->gateway_response;
+
+
+
+        } catch (PDOException $e) {
+            $response['error']   = true;
+            $response['message'] = $e->getMessage();
+            $res->getBody()->write(json_encode($response));
+            return $res
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(500);
+        }
+    
+});
 
 
 //Functions
@@ -1939,8 +2483,20 @@ function generateotp()
 //Generate Random Number
 function random()
 {
+    $characters = 6;
+    $letters    = '1234567890';
+    $str        = '';
+    for ($i = 0; $i < $characters; $i++) {
+        $str .= substr($letters, mt_rand(0, strlen($letters) - 1), 1);
+    }
+    return $str;
+}
+
+//Generate Alphabeth Random 
+function alphabeth_random()
+{
     $characters = 8;
-    $letters    = '234567890';
+    $letters    = 'abccdefghjkmnpqrstuv';
     $str        = '';
     for ($i = 0; $i < $characters; $i++) {
         $str .= substr($letters, mt_rand(0, strlen($letters) - 1), 1);
@@ -2032,7 +2588,7 @@ function registerUser($email, $phoneno, $firstname, $lastname, $agentId)
     $curl = curl_init();
 
     curl_setopt_array($curl, array(
-        CURLOPT_URL => BASE_URL . '/mosave/script/api/users/register',
+        CURLOPT_URL => BASE_URL . '/users/register',
         //CURLOPT_URL => 'https://moloyal.com/test/mosave/script/api/registeruser/test',
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_ENCODING => '',
@@ -2228,5 +2784,110 @@ function validateJWT($jwt)
         );
     }
 }
+
+
+function paystackTransferToBank($transAmount,$bank_details)
+{
+    $refs= getTransactionRef();
+        $curl = curl_init();
+    
+    curl_setopt_array($curl, array(
+      CURLOPT_URL => 'https://api.paystack.co/transferrecipient',
+      CURLOPT_RETURNTRANSFER => true,
+      CURLOPT_ENCODING => '',
+      CURLOPT_MAXREDIRS => 10,
+      CURLOPT_TIMEOUT => 0,
+      CURLOPT_FOLLOWLOCATION => true,
+      CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+      CURLOPT_CUSTOMREQUEST => 'POST',
+      CURLOPT_POSTFIELDS =>json_encode($bank_details),
+      CURLOPT_HTTPHEADER => array(
+        'Authorization: Bearer sk_live_283e8912e82f34b275a577b97659aec29bf778d1',
+        'Accept: application/json',
+        'Content-Type: text/plain',
+       
+      ),
+    ));
+    
+    $res1 = curl_exec($curl);
+    
+    curl_close($curl);
+    $kks=json_decode($res1);
+    $data=$kks->data;
+    
+    $rec_code=$data->recipient_code;
+    $nairaamt=$transAmount*100;
+    $random1=random();
+    $random2=alphabeth_random();
+    $rando=$random1.$random2;
+     $pay_details['source']="balance";
+         $pay_details['amount']=$nairaamt;
+        $pay_details['reference']=$refs;
+        
+        $pay_details['reason']="Mosave Withdrawal";
+        $pay_details['recipient']=$rec_code;
+        
+        
+    // $pay_details='{ "source": "balance", 
+    //       "amount": echo $transAmount,
+    //       "reference": "wsfzsgxzf2343dt45543232ez", 
+    //       "recipient": ".$rec_code.", 
+    //       "reason": "Holiday Flexing" 
+    //     }';
+    
+        $curls = curl_init();
+    
+    curl_setopt_array($curls, array(
+      CURLOPT_URL => 'https://api.paystack.co/transfer',
+      CURLOPT_RETURNTRANSFER => true,
+      CURLOPT_ENCODING => '',
+      CURLOPT_MAXREDIRS => 10,
+      CURLOPT_TIMEOUT => 0,
+      CURLOPT_FOLLOWLOCATION => true,
+      CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+      CURLOPT_CUSTOMREQUEST => 'POST',
+      CURLOPT_POSTFIELDS =>json_encode($pay_details),
+      CURLOPT_HTTPHEADER => array(
+        //'Authorization: Bearer sk_live_283e8912e82f34b275a577b97659aec29bf778d1',
+        'Accept: application/json',
+        'Content-Type: text/plain',
+       
+      ),
+    ));
+    
+    $res = curl_exec($curls);
+    
+    curl_close($curls);
+    $kk=json_decode($res);
+        
+      
+        //echo json_encode($response);
+        $response['trans_mode']='BW';
+        $response['banktransfer_res']= $kk;
+        
+    return $response;
+}
+
+
+
+function encrypt_decrypt($action, $string) {
+    $output = false;
+    $encrypt_method = "AES-256-CBC";
+    $secret_key = 'Welcome12';
+    $secret_salt = 'AvanteCS12';
+    // hash
+    $key = hash('sha256', $secret_key);
+    
+    // iv - encrypt method AES-256-CBC expects 16 bytes - else you will get a warning
+    $iv = substr(hash('sha256', $secret_salt), 0, 16);
+    if ( $action == 'encrypt' ) {
+        $output = openssl_encrypt($string, $encrypt_method, $key, 0, $iv);
+        $output = base64_encode($output);
+    } else if( $action == 'decrypt' ) {
+        $output = openssl_decrypt(base64_decode($string), $encrypt_method, $key, 0, $iv);
+    }
+    return $output;
+}
+
 
 $app->run();
