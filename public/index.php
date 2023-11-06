@@ -62,6 +62,29 @@ $app->delete('/customers-data/delete/{id}', function (Request $request, Response
     $id = $args["id"];
 
     $sql = "DELETE FROM customers WHERE id = $id";
+
+    //print_r($_ENV);
+    // Retrieve the request's body and parse it as JSON
+
+    // if ((strtoupper($_SERVER['REQUEST_METHOD']) != 'POST' ) || !array_key_exists('HTTP_X_PAYSTACK_SIGNATURE', $_SERVER) ) 
+    // exit();
+
+    // Retrieve the request's body
+
+    // $input = @file_get_contents("php://input");
+    // define('PAYSTACK_SECRET_KEY','SECRET_KEY');
+
+    // validate event do all at once to avoid timing attack
+
+    // if($_SERVER['HTTP_X_PAYSTACK_SIGNATURE'] !== hash_hmac('sha512', $input, PAYSTACK_SECRET_KEY))
+    //     exit();
+
+
+
+    // $input = @file_get_contents("php://input");
+    // $event = json_decode($input);
+    // // Do something with $event
+    // http_response_code(200); // PHP 5.4
 });
 
 $app->post('/confirm/jwt/test', function (Request $req, Response $res) {
@@ -70,7 +93,7 @@ $app->post('/confirm/jwt/test', function (Request $req, Response $res) {
     $conn = new Db();
     $db = $conn->connect();
     $data = $req->getParsedBody();
-    $firstname = $data["firstname"];
+    $firstname = $data["status"];
     $bvn = $data["bvn"];
     $phoneno = $data["phoneno"];
     $lastname = $data["lastname"];
@@ -80,7 +103,10 @@ $app->post('/confirm/jwt/test', function (Request $req, Response $res) {
 
     $arr = explode(" ", $authHeader);
 
-
+    $res->getBody()->write(json_encode($firstname));
+    return $res
+        ->withHeader('content-type', 'application/json')
+        ->withStatus(401);
 
     $jwt = $arr[1];
     $result = validateJWT($jwt);
@@ -117,6 +143,289 @@ $app->post('/confirm/jwt/test', function (Request $req, Response $res) {
         }
     }
 });
+
+$app->post('/customer/wallettransfer', function (Request $req, Response $res) {
+
+
+    $response = array();
+    $conn = new Db();
+    $db = $conn->connect();
+    $data = $req->getParsedBody();
+    $senderwallet = $data["senderwallet"]; //e.g LOY, SAV, TIC
+    $planId = $data["saving_plan_id"];
+    $accountId = $data["saving_account_id"];   // if SAV, then this is required
+    $receiverwallet = $data["receiverwallet"];  //e.g LOY, SAV, TIC
+    $transAmount = $data["amount"];
+  
+
+    if($senderwallet === 'LOY' ){
+
+        $walletName= "MoLoyal Wallet";
+    }elseif($senderwallet === 'SAV'){
+
+        $walletName= "MoSave Wallet";
+    }elseif($senderwallet === 'TIC'){
+        $walletName= "MoTicket Wallet";
+    }
+
+    if($receiverwallet === 'LOY' ){
+
+        $rec_walletName= "MoLoyal Wallet";
+    }elseif($receiverwallet === 'SAV'){
+
+        $rec_walletName= "MoSave Wallet";
+    }elseif($receiverwallet === 'TIC'){
+        $rec_walletName= "MoTicket Wallet";
+    }
+
+
+    $jwt = null;
+    $authHeader = $_SERVER['HTTP_AUTHORIZATION'];
+
+    $arr = explode(" ", $authHeader);
+
+
+
+    $jwt = $arr[1];
+    $result = validateJWT($jwt);
+
+    if ($result['validate_flag'] != 1) {
+
+        $res->getBody()->write(json_encode($result));
+        return $res
+            ->withHeader('content-type', 'application/json')
+            ->withStatus(401);
+    } else {
+
+
+
+        try {
+
+            $token_email = $result['token_value']->data->email;
+            //echo $token_email;
+
+            $token_id = $result['token_value']->data->id;
+            //echo $token_id;
+
+            $token_userid = $result['token_value']->data->userId;
+            //echo $token_userid;
+
+
+            if ($senderwallet === "SAV") {
+
+
+                $sqlsa = "SELECT  `account_code`, `account_name`, `minimum_bal`, `desc` FROM `mosave_account_type` WHERE sn=:actid";
+
+                $stmtb = $db->prepare($sqlsa);
+                $stmtb->bindParam("actid", $accountId);
+
+                $stmtb->execute();
+                $resultsa = $stmtb->fetch();
+
+                //$response=$email;
+                if (!$resultsa) {
+                    //$response['error']=true;
+                    $response['message'] = "Cannot find Customer account type";
+                } else {
+
+                    $accountCode = $resultsa['account_code'];
+                    $accountType = $resultsa['account_name'];
+                    $bal = $resultsa['minimum_bal'];
+
+
+                    $walletqrys = "SELECT `account_bal` as wBalances FROM `mosave_wallet` WHERE  customerId=:custid and accountId=:actid ";
+
+
+                    $walstmts = $db->prepare($walletqrys);
+
+                    $walstmts->bindParam(":custid", $customerId, PDO::PARAM_STR);
+                    $walstmts->bindParam(":actid", $accountId, PDO::PARAM_STR);
+
+                    $walstmts->execute();
+                    $reds = $walstmts->fetch();
+
+
+                    $wallet_balances = $reds['wBalances'];
+
+                    $walletqry = "SELECT `available_bal` as wBalance, `account_bal`  FROM `mosave_plan_wallet` WHERE  customerId=:custid and accountId=:actid and plan_id=:pid ";
+
+
+                    $walstmt = $db->prepare($walletqry);
+
+                    $walstmt->bindParam(":custid", $customerId, PDO::PARAM_STR);
+                    $walstmt->bindParam(":actid", $accountId, PDO::PARAM_STR);
+                    $walstmt->bindParam(":pid", $planId, PDO::PARAM_STR);
+
+                    $walstmt->execute();
+                    $red = $walstmt->fetch();
+
+
+                    $wBalance = $red['wBalance'];
+                    $account_bal = $red['account_bal'];
+
+
+
+                    $amts = $transAmount;
+                    $amt = $transAmount * (-1);
+                    $newBalance = $wBalance + $amt;
+                    $newBalancecheck = $newBalance * (-1);
+
+                    $mosave_wal = $wallet_balances - $transAmount;
+                    $ac_bal = $account_bal - $transAmount;
+                    // $response['t']=$newBalancecheck;
+                    //$response['n']=$newBalance;
+                    //$response['j']=$bal;
+
+
+
+                    if ($amts > $wBalance) {
+
+                        $response['error'] = true;
+                        $response['message'] = "Insufficient funds";
+                        $res->getBody()->write(json_encode($response));
+                        return $res
+                            ->withHeader('content-type', 'application/json')
+                            ->withStatus(500);
+                    }else{
+                    $available_bal = $newBalance - $bal;
+
+
+                    $updwalqryplan = "UPDATE `mosave_plan_wallet` SET `account_bal`=:ac_bal, `available_bal`=:newb  WHERE accountId=:actid and customerId=:custid and plan_id=:pid ";
+
+                    $walstmtplan = $db->prepare($updwalqryplan);
+                    $walstmtplan->bindParam(":ac_bal", $ac_bal, PDO::PARAM_STR);
+                    $walstmtplan->bindParam(":newb", $newBalance, PDO::PARAM_STR);
+                    $walstmtplan->bindParam(":custid", $customerId, PDO::PARAM_STR);
+                    $walstmtplan->bindParam(":actid", $accountId, PDO::PARAM_STR);
+                    $walstmtplan->bindParam(":pid", $planId, PDO::PARAM_STR);
+
+                    $walstmtplan->execute();
+
+                    $updwalqry = "UPDATE `mosave_wallet` SET `account_bal`='$mosave_wal'  WHERE accountId=:actid and customerId=:custid ";
+
+                    $walstmt = $db->prepare($updwalqry);
+
+                    $walstmt->bindParam(":custid", $customerId, PDO::PARAM_STR);
+                    $walstmt->bindParam(":actid", $accountId, PDO::PARAM_STR);
+
+                    $walstmt->execute();
+
+                    $trans_mode = 'WT';
+                    $desc = 'Transfer to '.$walletName;
+
+                    $sql = "INSERT INTO `mosave_savingtransaction`(`customerId`, `agentId`,`accountId`, `planId`, `accountNo`, `transAmount`,`transType`,`transref`,`des`
+            `accountType`, `accountCode`,`trans_mode`,  `transDate`,`time`,`ip`) VALUES (:customerId,:agentId,:actids,:pid,:accountNo,:transAmount,:transtype,:transref,:des,:accountType,:accountCode,:trans_mode,:datecreated,:time,:ip)";
+
+
+                    $stmt = $db->prepare($sql);
+
+                    $stmt->bindParam(":customerId", $customerId, PDO::PARAM_STR);
+                    $stmt->bindParam(":agentId", $agentId, PDO::PARAM_STR);
+                    $stmt->bindParam(":actids", $accountId, PDO::PARAM_STR);
+                    $stmt->bindParam(":pid", $planId, PDO::PARAM_STR);
+                    $stmt->bindParam(":accountNo", $accountNo, PDO::PARAM_STR);
+                    $stmt->bindParam(":transAmount", $transAmount, PDO::PARAM_STR);
+                    $stmt->bindParam(":transtype", $transtype, PDO::PARAM_STR);
+                    $stmt->bindParam(":des", $desc, PDO::PARAM_STR);
+                    $stmt->bindParam(":transref", $refs, PDO::PARAM_STR);
+                    $stmt->bindParam(":trans_mode", $trans_mode, PDO::PARAM_STR);
+                    $stmt->bindParam(":accountType", $accountType, PDO::PARAM_STR);
+                    $stmt->bindParam(":accountCode", $accountCode, PDO::PARAM_STR);
+
+
+
+
+                    $stmt->bindParam(":datecreated", $dateCreated, PDO::PARAM_STR);
+                    $stmt->bindParam(":time", $time, PDO::PARAM_STR);
+                    $stmt->bindParam(":ip", $ip, PDO::PARAM_STR);
+
+                    //$stmt->execute();
+                    $result = $stmt->execute();
+                    //$result = $stmt->fetch();
+                }
+            }
+            }
+
+            if ($senderwallet === "LOY") {
+                $walletqrys = "SELECT `redeemableamt`  FROM `mosave_loyalty_wallet` WHERE  customerId=:custid ";
+
+
+                $walstmts = $db->prepare($walletqrys);
+
+                $walstmts->bindParam(":custid", $customerId, PDO::PARAM_STR);
+               
+
+                $walstmts->execute();
+                $reds = $walstmts->fetch();
+
+
+                $redeemableamt = $reds['redeemableamt'];
+
+                if ($transAmount > $redeemableamt) {
+
+                    $response['error'] = true;
+                    $response['message'] = "Insufficient funds";
+                }else{
+                $moloyal_bal = $redeemableamt - $transAmount;
+                $ac_bal = $account_bal - $transAmount;
+                
+                $updwalqry = "UPDATE `mosave_loyalty_wallet` SET `redeemableamt`=:moloyal_bal  WHERE  customerId=:custid ";
+
+                $walstmt = $db->prepare($updwalqry);
+
+                $walstmt->bindParam(":custid", $customerId, PDO::PARAM_STR);
+                $walstmt->bindParam(":moloyal_bal", $moloyal_bal, PDO::PARAM_STR);
+
+                $walstmt->execute();
+
+                $trans_mode = 'WT';
+                $desc = 'Transfer to '.$walletName;
+
+                $sql = "INSERT INTO `mosave_savingtransaction`(`customerId`, `agentId`,`accountId`, `planId`, `accountNo`, `transAmount`,`transType`,`transref`,`des`
+        `accountType`, `accountCode`,`trans_mode`,  `transDate`,`time`,`ip`) VALUES (:customerId,:agentId,:actids,:pid,:accountNo,:transAmount,:transtype,:transref,:des,:accountType,:accountCode,:trans_mode,:datecreated,:time,:ip)";
+
+
+                $stmt = $db->prepare($sql);
+
+                $stmt->bindParam(":customerId", $customerId, PDO::PARAM_STR);
+                $stmt->bindParam(":agentId", $agentId, PDO::PARAM_STR);
+                $stmt->bindParam(":actids", $accountId, PDO::PARAM_STR);
+                $stmt->bindParam(":pid", $planId, PDO::PARAM_STR);
+                $stmt->bindParam(":accountNo", $accountNo, PDO::PARAM_STR);
+                $stmt->bindParam(":transAmount", $transAmount, PDO::PARAM_STR);
+                $stmt->bindParam(":transtype", $transtype, PDO::PARAM_STR);
+                $stmt->bindParam(":des", $desc, PDO::PARAM_STR);
+                $stmt->bindParam(":transref", $refs, PDO::PARAM_STR);
+                $stmt->bindParam(":trans_mode", $trans_mode, PDO::PARAM_STR);
+                $stmt->bindParam(":accountType", $accountType, PDO::PARAM_STR);
+                $stmt->bindParam(":accountCode", $accountCode, PDO::PARAM_STR);
+
+
+
+
+                $stmt->bindParam(":datecreated", $dateCreated, PDO::PARAM_STR);
+                $stmt->bindParam(":time", $time, PDO::PARAM_STR);
+                $stmt->bindParam(":ip", $ip, PDO::PARAM_STR);
+
+                //$stmt->execute();
+                $result = $stmt->execute();
+
+
+                } 
+
+
+            }
+        } catch (PDOException $e) {
+            $response['error']   = true;
+            $response['message'] = $e->getMessage();
+            $res->getBody()->write(json_encode($response));
+            return $res
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(500);
+        }
+    }
+});
+
 
 $app->post('/db/test', function (Request $req, Response $response) {
     //print_r($_ENV);
@@ -145,498 +454,6 @@ $app->post('/db/test', function (Request $req, Response $response) {
     ->withHeader('content-type', 'application/json')
     ->withStatus(401);
 });
-
-$app->post('/customer/wallettransfer', function (Request $req, Response $res) {
-
-    
-    $response = array();
-    $conn = new Db();
-    $db = $conn->connect();
-    $data = $req->getParsedBody();
-    $senderwallet = $data["senderwallet"]; //e.g LOY, SAV, TIC
-    $planId = $data["saving_plan_id"];  
-    $accountId = $data["saving_account_id"];   // if SAV, then this is required
-    $receiverwallet = $data["receiverwallet"];  //e.g LOY, SAV, TIC
-    $transAmount = $data["amount"];
-    $desc = $data["desc"];
-    
-    $jwt = null;
-    $authHeader = $_SERVER['HTTP_AUTHORIZATION'];
-
-    $arr = explode(" ", $authHeader);
-
-
-
-    $jwt = $arr[1];
-    $result = validateJWT($jwt);
-
-    if ($result['validate_flag'] != 1) {
-       
-        $res->getBody()->write(json_encode($result));
-            return $res
-                ->withHeader('content-type', 'application/json')
-                ->withStatus(401);
-    } else {
-        
-    
-
-        try {
-
-            $token_email = $result['token_value']->data->email;
-            //echo $token_email;
-
-            $token_id = $result['token_value']->data->id;
-            //echo $token_id;
-
-            $token_userid = $result['token_value']->data->userId;
-            //echo $token_userid;
-
-
-            if($senderwallet==="SAV"){
-
-
-                $sqlsa = "SELECT  `account_code`, `account_name`, `minimum_bal`, `desc` FROM `mosave_account_type` WHERE sn=:actid";
-       
-                $stmtb = $db->prepare($sqlsa);  
-                $stmtb->bindParam("actid", $accountId);
-                
-                        $stmtb->execute();
-                        $resultsa = $stmtb->fetch();
-        
-                        //$response=$email;
-                         if(!$resultsa){
-         //$response['error']=true;
-                        $response['message']="Cannot find Customer account type";
-        
-        
-        }else{
-                       
-        $accountCode = $resultsa['account_code'];
-        $accountType = $resultsa['account_name'];
-        $bal = $resultsa['minimum_bal'];
-
-
-                $walletqrys="SELECT `account_bal` as wBalances FROM `mosave_wallet` WHERE  customerId=:custid and accountId=:actid ";
-   
-
-        $walstmts = $db->prepare($walletqrys);  
-        
-        $walstmts->bindParam(":custid", $customerId,PDO::PARAM_STR);
-         $walstmts->bindParam(":actid", $accountId,PDO::PARAM_STR); 
-        
- $walstmts->execute();
-	 $reds = $walstmts->fetch();
-	 
-
- $wallet_balances=$reds['wBalances'];
-
- $walletqry="SELECT `available_bal` as wBalance, `account_bal`  FROM `mosave_plan_wallet` WHERE  customerId=:custid and accountId=:actid and plan_id=:pid ";
-   
-  
-        $walstmt = $db->prepare($walletqry);  
-        
-        $walstmt->bindParam(":custid", $customerId,PDO::PARAM_STR);
-         $walstmt->bindParam(":actid", $accountId,PDO::PARAM_STR); 
-         $walstmt->bindParam(":pid", $planId,PDO::PARAM_STR); 
-
- $walstmt->execute();
-	 $red = $walstmt->fetch();
-	 
-
- $wBalance=$red['wBalance'];
-  $account_bal=$red['account_bal'];
-
-
-  
-            $amts=$transAmount;
-            $amt=$transAmount*(-1); 
-                     $newBalance= $wBalance + $amt;  
-                      $newBalancecheck= $newBalance*(-1);  
-                      
-                    $mosave_wal=$wallet_balances- $transAmount;
-                    $ac_bal=$account_bal- $transAmount;
-                      // $response['t']=$newBalancecheck;
-                     //$response['n']=$newBalance;
-            //$response['j']=$bal;
-            
-            
-            
-            if($amts>$wBalance){
-            
-             $response['error']=true;
-                            $response['message']="Insufficient funds";
-                                               
-                           
-                         }
-            $available_bal=$newBalance-$bal;
-
-
-            $updwalqryplan="UPDATE `mosave_plan_wallet` SET `account_bal`=:ac_bal, `available_bal`=:newb  WHERE accountId=:actid and customerId=:custid and plan_id=:pid ";
-            
-            $walstmtplan = $db->prepare($updwalqryplan);  
-            $walstmtplan->bindParam(":ac_bal", $ac_bal,PDO::PARAM_STR);
-            $walstmtplan->bindParam(":newb", $newBalance,PDO::PARAM_STR); 
-            $walstmtplan->bindParam(":custid", $customerId,PDO::PARAM_STR);
-            $walstmtplan->bindParam(":actid", $accountId,PDO::PARAM_STR); 
-            $walstmtplan->bindParam(":pid", $planId,PDO::PARAM_STR); 
-            
-            $walstmtplan->execute();
-            
-                   $updwalqry="UPDATE `mosave_wallet` SET `account_bal`='$mosave_wal'  WHERE accountId=:actid and customerId=:custid ";
-           
-            $walstmt = $db->prepare($updwalqry);  
-            
-            $walstmt->bindParam(":custid", $customerId,PDO::PARAM_STR);
-            $walstmt->bindParam(":actid", $accountId,PDO::PARAM_STR);     
-            
-            $walstmt->execute();
-            
-             $trans_mode='CW';
-            
-               
-            $sql = "INSERT INTO `mosave_savingtransaction`(`customerId`, `agentId`,`accountId`, `planId`, `accountNo`, `transAmount`,`transType`,`transref`,
-            `accountType`, `accountCode`,`trans_mode`,  `transDate`,`time`,`ip`) VALUES (:customerId,:agentId,:actids,:pid,:accountNo,:transAmount,:transtype,:transref,:accountType,:accountCode,:trans_mode,:datecreated,:time,:ip)";
-            
-            
-            $stmt = $db->prepare($sql);  
-            
-            $stmt->bindParam(":customerId", $customerId,PDO::PARAM_STR);
-            $stmt->bindParam(":agentId", $agentId,PDO::PARAM_STR);
-            $stmt->bindParam(":actids", $accountId,PDO::PARAM_STR);
-            $stmt->bindParam(":pid", $planId,PDO::PARAM_STR);
-            $stmt->bindParam(":accountNo", $accountNo,PDO::PARAM_STR);
-            $stmt->bindParam(":transAmount", $transAmount,PDO::PARAM_STR);
-            $stmt->bindParam(":transtype", $transtype,PDO::PARAM_STR);
-            $stmt->bindParam(":transref", $refs,PDO::PARAM_STR);
-            $stmt->bindParam(":trans_mode", $trans_mode,PDO::PARAM_STR);
-            $stmt->bindParam(":accountType", $accountType,PDO::PARAM_STR);
-            $stmt->bindParam(":accountCode", $accountCode,PDO::PARAM_STR);
-            
-            
-            
-            
-            $stmt->bindParam(":datecreated", $dateCreated,PDO::PARAM_STR);
-            $stmt->bindParam(":time", $time,PDO::PARAM_STR);
-            $stmt->bindParam(":ip", $ip,PDO::PARAM_STR);
-            
-            //$stmt->execute();
-            $result=$stmt->execute();
-            //$result = $stmt->fetch();
-         }
-     }
-
-            if($senderwallet==="LOY"){
-
-
-            
-
-                        }
-
-
-        } catch (PDOException $e) {
-            $response['error']   = true;
-            $response['message'] = $e->getMessage();
-            $res->getBody()->write(json_encode($response));
-            return $res
-                ->withHeader('content-type', 'application/json')
-                ->withStatus(500);
-        }
-    }
-});
-
-$app->post('/paystack/initialisetrans', function (Request $req, Response $res) {
-    $response = array();
-    $conn = new Db();
-    $db = $conn->connect();
-
-    $data = $req->getParsedBody();
-    $amount = $data["amount"];
-    $currency = $data["currency"];
-    $save_card = $data["save_card"];
-
-    $refs= getTransactionRef();
-    $jwt = null;
-    $authHeader = $_SERVER['HTTP_AUTHORIZATION'];
-
-    $arr = explode(" ", $authHeader);
-
-
-
-    $jwt = $arr[1];
-    $result = validateJWT($jwt);
-
-    if ($result['validate_flag'] != 1) {
-       
-        $res->getBody()->write(json_encode($result));
-            return $res
-                ->withHeader('content-type', 'application/json')
-                ->withStatus(401);
-    } else {
-        
-    
-
-        try {
-
-            $token_email = $result['token_value']->data->email;
-            //echo $token_email;
-
-            $token_id = $result['token_value']->data->id;
-            //echo $token_id;
-
-            $token_userid = $result['token_value']->data->userId;
-            //echo $token_userid;
-
-             $url = "https://api.paystack.co/transaction/initialize";
-
-             $paystack_secret_key = $_ENV['PAYSTACK_SECRET_KEY'];
-            $paystack_callback_url = 
-            $curl = curl_init();
-
-            $amt=intval($amount);
-
-           $fields=array(
-            "email" => $token_email,
-            "currency" => $currency,
-            "amount" => $amount,
-            "reference"=>$refs,
-            "callback_url"=> "https://moloyal.com/test/mosave/customerapi/paystack/callback",
-              );
-
-              $json_fields=json_encode($fields);
-            curl_setopt_array($curl, array(
-              CURLOPT_URL => $url,
-              CURLOPT_RETURNTRANSFER => true,
-              CURLOPT_ENCODING => '',
-              CURLOPT_MAXREDIRS => 10,
-              CURLOPT_TIMEOUT => 0,
-               CURLOPT_SSL_VERIFYPEER=> false,
-              CURLOPT_FOLLOWLOCATION => true,
-              CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
-              CURLOPT_CUSTOMREQUEST => 'POST',
-              CURLOPT_POSTFIELDS => $json_fields,
-              CURLOPT_HTTPHEADER => array(
-                'Authorization: Bearer '.$paystack_secret_key,
-                'Content-Type: application/json'
-              ),
-            ));
-            
-            $resulta = curl_exec($curl);
-            
-            curl_close($curl);
-           //echo $response;
-            
-
-
-            
-                if($resulta === "false"){
-                    $dd= curl_error($curl);
-                    $res->getBody()->write(json_encode($dd));
-                    return $res
-                        ->withHeader('content-type', 'application/json')
-                        ->withStatus(401);
-                }else{
-                    if($save_card == 1){
-                    $kks=json_decode($resulta);
-                    $reference=$kks->data->reference;
-                    $accesscode=$kks->data->access_code;
-                    // $authorization_code =encrypt_decrypt('decrypt',$rs['authorization_code']);
-                    // $last4 =encrypt_decrypt('decrypt',$rs['last4']);
-
-                    $sqla = "INSERT INTO `recurring_payment`( `email_address`,  `reference`, `status`) VALUES
-                    (:email,:ref,0)";
-                                 
-              
-                                  $stmt = $db->prepare($sqla);
-                                  $stmt->bindParam(":email", $token_email, PDO::PARAM_STR);
-                                  $stmt->bindParam(":ref", $reference, PDO::PARAM_STR);
-                                    $rr= $stmt->execute();
-                    
-                                }
-
-
-            $res->getBody()->write($resulta);
-            return $res
-                ->withHeader('content-type', 'application/json')
-                ->withStatus(200);
-        
-                }
-
-
-
-        }catch (PDOException $e) {
-            $response['error']   = true;
-            $response['message'] = $e->getMessage();
-            $res->getBody()->write(json_encode($response));
-            return $res
-                ->withHeader('content-type', 'application/json')
-                ->withStatus(500);
-        }
-    
-    }
-    
-
-    
-});
-
-
-$app->post('/paystack/callback', function (Request $req, Response $response) {
-    //print_r($_ENV);
-    // Retrieve the request's body and parse it as JSON
-
-    // if ((strtoupper($_SERVER['REQUEST_METHOD']) != 'POST' ) || !array_key_exists('HTTP_X_PAYSTACK_SIGNATURE', $_SERVER) ) 
-    // exit();
-
-    // Retrieve the request's body
-
-    // $input = @file_get_contents("php://input");
-    // define('PAYSTACK_SECRET_KEY','SECRET_KEY');
-
-    // validate event do all at once to avoid timing attack
-
-    // if($_SERVER['HTTP_X_PAYSTACK_SIGNATURE'] !== hash_hmac('sha512', $input, PAYSTACK_SECRET_KEY))
-    //     exit();
-
-
-
-    // $input = @file_get_contents("php://input");
-    // $event = json_decode($input);
-    // // Do something with $event
-    // http_response_code(200); // PHP 5.4
-
-
-   
-
-    $conn = new Db();
-    $db = $conn->connect();
-
-    try{
-        $paystack_secret_key = $_ENV['PAYSTACK_SECRET_KEY'];
-        $reference =$req->getQueryParams()['reference'] ?? null;
-         //$ref1= json_decode($params);
-         
-         //$ref=$ref1->reference;
-        
-         $curl = curl_init();
-          
-          curl_setopt_array($curl, array(
-            CURLOPT_URL => "https://api.paystack.co/transaction/verify/".$reference,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_ENCODING => "",
-            CURLOPT_MAXREDIRS => 10,
-            CURLOPT_TIMEOUT => 30,
-            CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
-            CURLOPT_CUSTOMREQUEST => "GET",
-            CURLOPT_HTTPHEADER => array(
-              "Authorization: Bearer  $paystack_secret_key",
-              "Cache-Control: no-cache",
-            ),
-          ));
-          
-          $resp = curl_exec($curl);
-          $err = curl_error($curl);
-        
-          curl_close($curl);
-          
-          
-           if ($err) {
-             $response->getBody()->write(json_encode($err));
-            return $response
-                ->withHeader('content-type', 'application/json')
-                ->withStatus(500);
-          } else {
-
-            $check = json_decode($resp)->data->status;
-            if($check === "success"){
-            $refss = json_decode($resp)->data->reference;
-                //select email if available
-                //then update recurring_payment with authotisation
-                $customer_json_fields = json_decode($resp)->data->customer;
-                $cust_email= $customer_json_fields->email;
-               
-               
-
-                $sqlv = "SELECT * FROM `recurring_payment` WHERE `email_address`=: email and `reference`=: ref";
-                $stmta = $db->prepare($sqlv);
-                $stmta->bindParam(":email", $cust_email, PDO::PARAM_STR);
-                $stmta->bindParam(":ref", $refss, PDO::PARAM_STR);
-
-               
-                  $rra= $stmta->execute();
-
-                  $resultsa = $stmta->fetch();
-                  $num = $stmta->rowCount();
-
-                  if ($num > 0) {
-          
-                $json_fields = json_decode($resp)->data->authorization;
-                $auth_code= $json_fields->authorization_code;
-                   $bin= $json_fields->bin;
-                    $last4= $json_fields->last4;
-                     $exp_month= $json_fields->exp_month;
-                      $exp_year= $json_fields->exp_year;
-                       $channel= $json_fields->channel;
-                        $bank= $json_fields->bank;
-                        $country_code= $json_fields->country_code;
-                        $reusable= $json_fields->reusable;
-                        $signature= $json_fields->signature;
-                        $account_name= $json_fields->account_name;
-
-
-            $sqla = "UPDATE `recurring_payment` SET `authorization_code`=:authcode,
-            `card_type`=:cardtype,`last4`=:last4,`exp_month`=:expmonth,
-            `exp_year`=:expyr,`bin`=:bin,`bank`=:bank,
-            `channel`=:channel,`signature`=:signature,`reusable`=:reusable,
-            `country_code`=:countrycode,`status`='1'
-             WHERE `email_address`=:email and `reference`=:ref";
-                                 
-              
-                                  $stmt = $db->prepare($sqla);
-                                  $stmt->bindParam(":authcode", $auth_code, PDO::PARAM_STR);
-                                  $stmt->bindParam(":cardtype", $card_type, PDO::PARAM_STR);
-                                  $stmt->bindParam(":last4", $last4, PDO::PARAM_STR);
-                                  $stmt->bindParam(":expmonth", $exp_month, PDO::PARAM_STR);
-                                  $stmt->bindParam(":expyr", $exp_year, PDO::PARAM_STR);
-                                  $stmt->bindParam(":bin", $bin, PDO::PARAM_STR);
-                                  $stmt->bindParam(":bank", $bank, PDO::PARAM_STR);
-                                  $stmt->bindParam(":channel", $channel, PDO::PARAM_STR);
-                                  $stmt->bindParam(":signature", $signature, PDO::PARAM_STR);
-                                  $stmt->bindParam(":reusable", $reusable, PDO::PARAM_STR);
-                                         $stmt->bindParam(":country_code", $country_code, PDO::PARAM_STR);
-                                  $stmt->bindParam(":email", $email, PDO::PARAM_STR);
-                                  $stmt->bindParam(":ref", $reference, PDO::PARAM_STR);
-                                  $rr= $stmt->execute();
-
-
-            $response->getBody()->write(($resp));
-            return $response->withHeader('content-type', 'application/json')
-                        ->withStatus(200);
-        
-            
-          }else{
-            $response->getBody()->write('payment not validated');
-            return $response->withHeader('content-type', 'application/json')
-                        ->withStatus(301);
-
-          }
-        
-        }
-    }
-        } catch (PDOException $e) {
-            $res['error']   = true;
-            $res['message'] = $e->getMessage();
-            $response->getBody()->write(json_encode($res));
-            return $response
-                ->withHeader('content-type', 'application/json')
-                ->withStatus(500);
-        }   
-            
-       
-    
-});
-
-
-
-
 //customer register
 
 $app->post('/customer/register', function (Request $request, Response $response) {
@@ -1238,14 +1055,15 @@ $app->post('/customer/login', function (Request $request, Response $response) {
 
 
                     if ($programDB) {
-
+                            $date   = new DateTimeImmutable();
+                         
 
                         $secret_key = $_ENV['JWT_SECRET_KEY'];
                         $issuer_claim = "www.moloyal.com"; // this can be the servername
                         $audience_claim = "www.moloyal.com";
-                        $issuedat_claim = time(); // issued at
+                        $issuedat_claim = $date->getTimestamp(); // issued at
                         $notbefore_claim = $issuedat_claim + 10; //not before in seconds
-                        $expire_claim = $issuedat_claim + 600000; // expire time in seconds
+                        $expire_claim = $date->modify('+40 minutes')->getTimestamp(); // expire time in seconds
                         $token = array(
                             "iss" => $issuer_claim,
                             "aud" => $audience_claim,
@@ -2019,6 +1837,2157 @@ $app->post('/customer/resetpass', function (Request $req, Response $res) {
     }
 });
 
+
+
+$app->post('/paystack/initialise_transaction', function (Request $req, Response $res) {
+    $response = array();
+    $conn = new Db();
+    $db = $conn->connect();
+
+    $data = $req->getParsedBody();
+    $amount = $data["amount"];
+    $currency = $data["currency"];
+  
+
+    $refs= getTransactionRef();
+    $jwt = null;
+    $authHeader = $_SERVER['HTTP_AUTHORIZATION'];
+
+    $arr = explode(" ", $authHeader);
+
+
+
+    $jwt = $arr[1];
+    $result = validateJWT($jwt);
+
+    if ($result['validate_flag'] != 1) {
+       
+        $res->getBody()->write(json_encode($result));
+            return $res
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(401);
+    } else {
+        
+    
+
+        try {
+
+            $token_email = $result['token_value']->data->email;
+            //echo $token_email;
+
+            $token_id = $result['token_value']->data->id;
+            //echo $token_id;
+
+            $token_userid = $result['token_value']->data->userId;
+            //echo $token_userid;
+
+             $url = "https://api.paystack.co/transaction/initialize";
+
+            $paystack_secret_key = $_ENV['PAYSTACK_SECRET_KEY'];
+            $paystack_callback_url = $_ENV['PAYSTACK_CALLBACK_URL'];
+            $curl = curl_init();
+
+            
+
+           $fields=array(
+            "email" => $token_email,
+            "currency" => $currency,
+            "amount" => $amount,
+            "reference"=>$refs,
+            "callback_url"=> $paystack_callback_url,
+              );
+
+              $json_fields=json_encode($fields);
+            curl_setopt_array($curl, array(
+              CURLOPT_URL => $url,
+              CURLOPT_RETURNTRANSFER => true,
+              CURLOPT_ENCODING => '',
+              CURLOPT_MAXREDIRS => 10,
+              CURLOPT_TIMEOUT => 0,
+               CURLOPT_SSL_VERIFYPEER=> false,
+              CURLOPT_FOLLOWLOCATION => true,
+              CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+              CURLOPT_CUSTOMREQUEST => 'POST',
+              CURLOPT_POSTFIELDS => $json_fields,
+              CURLOPT_HTTPHEADER => array(
+                'Authorization: Bearer '.$paystack_secret_key,
+                'Content-Type: application/json'
+              ),
+            ));
+            
+            $resulta = curl_exec($curl);
+            
+            curl_close($curl);
+           //echo $response;
+            
+
+
+            
+                if($resulta === "false"){
+                    $dd= curl_error($curl);
+                    $res->getBody()->write(json_encode($dd));
+                    return $res
+                        ->withHeader('content-type', 'application/json')
+                        ->withStatus(401);
+                }else{
+                    
+
+            $res->getBody()->write($resulta);
+            return $res
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(200);
+        
+                }
+
+
+
+        }catch (PDOException $e) {
+            $response['error']   = true;
+            $response['message'] = $e->getMessage();
+            $res->getBody()->write(json_encode($response));
+            return $res
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(500);
+        }
+    
+    }
+    
+
+    
+});
+
+
+
+
+$app->get('/paystack/verify_transaction', function (Request $req, Response $response) {
+      
+
+    $conn = new Db();
+    $db = $conn->connect();
+
+    try{
+        $paystack_secret_key = $_ENV['PAYSTACK_SECRET_KEY'];
+        $reference =$req->getQueryParams()['reference'] ?? null;
+    $save_card =$req->getQueryParams()['savecard'] ?? null;
+         //$ref1= json_decode($params);
+         
+         //$ref=$ref1->reference;
+        
+         $curl = curl_init();
+          
+          curl_setopt_array($curl, array(
+            CURLOPT_URL => "https://api.paystack.co/transaction/verify/".$reference,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_ENCODING => "",
+            CURLOPT_MAXREDIRS => 10,
+            CURLOPT_TIMEOUT => 30,
+            CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+            CURLOPT_CUSTOMREQUEST => "GET",
+            CURLOPT_HTTPHEADER => array(
+              "Authorization: Bearer $paystack_secret_key",
+              "Cache-Control: no-cache",
+            ),
+          ));
+          
+          $resp = curl_exec($curl);
+          $err = curl_error($curl);
+        
+          curl_close($curl);
+          
+          
+           if ($err) {
+             $response->getBody()->write(json_encode($err));
+            return $response
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(500);
+          } else {
+ echo $check =$resp;
+             $check = json_decode($resp)->data->status;
+            if($check === "success"){
+            $refss = json_decode($resp)->data->reference;
+               
+                $customer_json_fields = json_decode($resp)->data->customer;
+                $cust_email= $customer_json_fields->email;
+               
+                //select email if available
+                //then update recurring_payment with authotisation
+
+               
+
+
+                    $json_fields = json_decode($resp)->data->authorization;
+                    $auth_code= $json_fields->authorization_code;
+                       $bin= $json_fields->bin;
+                        $last4= $json_fields->last4;
+                         $exp_month= $json_fields->exp_month;
+                          $exp_year= $json_fields->exp_year;
+                           $channel= $json_fields->channel;
+                            $bank= $json_fields->bank;
+                            $card_type= $json_fields->card_type;
+                            $country_code= $json_fields->country_code;
+                            $reusable= $json_fields->reusable;
+                            $signature= $json_fields->signature;
+                            $account_name= $json_fields->account_name;
+    
+    
+
+                    if($save_card === "true" ){
+
+
+                        $sqlv = "SELECT * FROM `recurring_payment` WHERE `email_address`=:email and `exp_month`=:exp_month and `exp_year`=:exp_year and `bin`=:bin";
+                        $stmta = $db->prepare($sqlv);
+                        $stmta->bindParam(":email", $cust_email, PDO::PARAM_STR);
+                        $stmta->bindParam(":exp_month", $exp_month, PDO::PARAM_STR);
+                        $stmta->bindParam(":exp_year", $exp_year, PDO::PARAM_STR);
+                        $stmta->bindParam(":bin", $bin, PDO::PARAM_STR);
+                        
+                       
+                          $rra= $stmta->execute();
+        
+                          $resultsa = $stmta->fetch();
+                         $num = $stmta->rowCount();
+        
+                          if ($num == 0) {
+                           //echo "got2"; 
+                                  
+                    $enc_last4=encrypt_decrypt('encrypt',$last4);
+                    $enc_signature=encrypt_decrypt('encrypt',$signature);
+                
+                    $enc_card_type=encrypt_decrypt('encrypt',$card_type);
+                
+                    $enc_auth_code=encrypt_decrypt('encrypt',$auth_code);
+                
+                    // $authorization_code =encrypt_decrypt('decrypt',$rs['authorization_code']);
+                    // $last4 =encrypt_decrypt('decrypt',$rs['last4']);
+
+                    $sqla = "INSERT INTO `recurring_payment`( `email_address`, `authorization_code`, 
+                    `card_type`, `last4`,
+                     `exp_month`, `exp_year`, `bin`, `acct_name`,`bank`, `channel`, `signature`, `reusable`, 
+                     `country_code`, `reference`, `status`) VALUES
+                    (:email,:authcode,:cardtype,:last4,:expmonth,:expyr,:bin,:account_name, :bank,
+                    :channel,:sign,:reusable,:countrycode,:ref, 1)";
+                                 
+              
+                                  $stmt = $db->prepare($sqla);
+                                  $stmt->bindParam(":authcode", $enc_auth_code, PDO::PARAM_STR);
+                                  $stmt->bindParam(":cardtype", $enc_card_type, PDO::PARAM_STR);
+                                  $stmt->bindParam(":last4", $enc_last4, PDO::PARAM_STR);
+                                  $stmt->bindParam(":expmonth", $exp_month, PDO::PARAM_STR);
+                                  $stmt->bindParam(":expyr", $exp_year, PDO::PARAM_STR);
+                                  $stmt->bindParam(":bin", $bin, PDO::PARAM_STR);
+                                  $stmt->bindParam(":account_name", $account_name, PDO::PARAM_STR);
+                                  $stmt->bindParam(":bank", $bank, PDO::PARAM_STR);
+                                  $stmt->bindParam(":channel", $channel, PDO::PARAM_STR);
+                                  $stmt->bindParam(":sign", $enc_signature, PDO::PARAM_STR);
+                                  $stmt->bindParam(":reusable", $reusable, PDO::PARAM_STR);
+                                         $stmt->bindParam(":countrycode", $country_code, PDO::PARAM_STR);
+                                  $stmt->bindParam(":email", $cust_email, PDO::PARAM_STR);
+                                  $stmt->bindParam(":ref", $refss, PDO::PARAM_STR);
+                                  
+                                  $rr= $stmt->execute();
+                    
+                                }
+                            }
+          
+                        
+
+
+           
+
+
+            $response->getBody()->write(json_encode('payment validated succesfully'));
+            return $response->withHeader('content-type', 'application/json')
+                        ->withStatus(200);
+        
+            
+          }else{
+            $response->getBody()->write('payment not validated');
+            return $response->withHeader('content-type', 'application/json')
+                        ->withStatus(301);
+
+          }
+        
+        
+    }
+        } catch (PDOException $e) {
+            $res['error']   = true;
+            $res['message'] = $e->getMessage();
+            $response->getBody()->write(json_encode($res));
+            return $response
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(500);
+        }   
+            
+       
+    
+});
+
+
+$app->post('/paystack/validate_banktransfer', function (Request $req, Response $res) {
+      
+
+    $conn = new Db();
+    $db = $conn->connect();
+
+  
+      
+          $payload=$req->getParsedBody();
+    $isValidTransferRequest= validateTransferToBankRequest($payload);
+// $res->getBody()->write(json_encode($isValidTransferRequest));
+//                 return $res
+//                 ->withHeader('content-type', 'application/json')
+//                 ->withStatus(200);
+                
+                
+    if( $isValidTransferRequest) {
+
+      $res->getBody()->write('');
+                return $res
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(200);
+      }
+    
+      $res->getBody()->write('');
+                return $res
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(400);
+   
+                   
+    
+});
+//Customer Withdrawal
+
+$app->post('/customer/withdrawal', function (Request $req, Response $res) {
+
+    $response = array();
+    $conn = new Db();
+    $dbs = $conn->connect();
+    $db = $conn->connect();
+
+    $jwt = null;
+    $authHeader = $_SERVER['HTTP_AUTHORIZATION'];
+
+    $arr = explode(" ",
+        $authHeader
+    );
+
+
+
+    $jwt = $arr[1];
+    $result = validateJWT($jwt);
+
+    if ($result['validate_flag'] != 1) {
+
+        $res->getBody()->write(json_encode($result));
+        return $res
+            ->withHeader('content-type', 'application/json')
+            ->withStatus(401);
+    } else {
+
+
+        try {
+
+
+            $email = $result['token_value']->data->email;
+            //echo $token_email;
+
+            $customerId = $result['token_value']->data->id;
+            //echo $token_id;
+
+            $token_userid = $result['token_value']->data->userId;
+            //echo $token_userid;
+
+            $data = $req->getParsedBody();
+            $planId = $data["planId"];
+
+            $transAmount = $data["transAmount"];
+            $accountId = $data["accountId"];
+           
+            
+            $otp = $data["otp"];
+            
+            
+
+
+            if ($planId == null || $planId == '') {
+                $response['error']   = true;
+                $response['message'] = "plan id is required";
+                $res->getBody()->write(json_encode($response));
+                return $res
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(401);
+            }
+
+            if ($accountId == null || $accountId == '') {
+                $response['error']   = true;
+                $response['message'] = "account type id is required";
+
+                $res->getBody()->write(json_encode($response));
+                return $res
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(401);
+            }
+
+            
+            if ($transAmount == null || $transAmount == '') {
+                $response['error']   = true;
+                $response['message'] = "transaction amount is required";
+
+                $res->getBody()->write(json_encode($response));
+                return $res
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(401);
+            }
+            if ($otp == null || $otp == '') {
+                $response['error']   = true;
+                $response['message'] = "transaction PIN is required";
+
+                $res->getBody()->write(json_encode($response));
+                return $res
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(401);
+            }
+
+            $getUserquery = "SELECT * FROM `config_user` WHERE `sn` = '$customerId' ";
+            $stmtpin = $dbs->prepare($getUserquery);
+                    $stmtpin->execute();
+             $resultss = $stmtpin->fetch();
+              $enc_pin= $resultss['pin'];
+
+            $auth = password_verify($otp, $enc_pin);
+            if($auth!='1'){
+                $response['error']=true;
+                $response['message']="Invalid Customer PIN or PIN expired";
+                $res->getBody()->write(json_encode($response));
+                return $res
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(403);
+
+            }else{
+                $sqlscust = "SELECT * FROM `config_customer_account_info` WHERE customerId=:custid";
+
+                $stmtcust = $dbs->prepare($sqlscust);
+                $stmtcust->bindParam("custid", $customerId);
+
+                $stmtcust->execute();
+                $resultcust = $stmtcust->fetch();
+                $accountNo = $resultcust['account_num'];
+                $bank_code = $resultcust['bank_code'];
+                $bank_name = $resultcust['bank_name'];
+                $bank_account_no = $resultcust['bank_account_no'];
+                $bank_account_name = $resultcust['bank_account_name'];
+                $currency = $resultcust['currency'];
+                $type='nuban';
+              
+                 $bank_details = array(
+                        'bank_code' => $bank_code,
+                        'type' => $type,
+                         'account_number' => $bank_account_no,
+                         'currency' => $currency,
+
+                       
+                        );
+
+
+                $refs = getTransactionRef();
+                $transtype = 'W';
+
+
+
+                //$passw = md5($request->password);
+                $work = str_pad(8, 2, '0', STR_PAD_LEFT);
+
+                $dateCreated = date("Y-m-d");
+
+                $time = date("H:i:s");
+
+                $ip = $_SERVER['REMOTE_ADDR'];
+
+
+                $sqlsssa = "SELECT * FROM `savings_plan` WHERE sn=:pid";
+
+                $stmtbsss = $dbs->prepare($sqlsssa);
+                $stmtbsss->bindParam("pid", $planId);
+
+                $stmtbsss->execute();
+                $resultsass = $stmtbsss->fetch();
+                $plans_id = $resultsass['sn'];
+                $plan_name = $resultsass['plan_name'];
+                $plan_amount = $resultsass['plan_amount'];
+                $days = $resultsass['days'];
+                $percentage_commission = $resultsass['percentage_commission'];
+                $money_commission = $resultsass['flat_commision'];
+                $billing_type = $resultsass['billing_type'];
+
+
+
+                $sqlsa = "SELECT  `account_code`, `account_name`, `minimum_bal`, `desc` FROM `mosave_account_type` WHERE sn=:actid";
+
+                $stmtb = $dbs->prepare($sqlsa);
+                $stmtb->bindParam("actid", $accountId);
+
+                $stmtb->execute();
+                $resultsa = $stmtb->fetch();
+
+                //$response=$email;
+                if (!$resultsa) {
+                    $response['error'] = true;
+                    $response['message'] = "Cannot find Customer account type";
+                    $res->getBody()->write(json_encode($response));
+                    return $res
+                        ->withHeader('content-type', 'application/json')
+                        ->withStatus(401);
+                } else {
+
+
+                    $accountCode = $resultsa['account_code'];
+                    $accountType = $resultsa['account_name'];
+                    $bal = $resultsa['minimum_bal'];
+
+                    $walletqrys = "SELECT `account_bal` as wBalances FROM `mosave_wallet` WHERE  customerId=:custid and accountId=:actid ";
+
+                    $waldb = $conn->connect();
+                    $walstmts = $waldb->prepare($walletqrys);
+
+                    $walstmts->bindParam(":custid", $customerId, PDO::PARAM_STR);
+                    $walstmts->bindParam(":actid", $accountId, PDO::PARAM_STR);
+
+                    $walstmts->execute();
+                    $reds = $walstmts->fetch();
+
+
+                    $wallet_balances = $reds['wBalances'];
+
+                    //get transactions done between last charge date and today
+                    $sqlupd = "SELECT * FROM `mosave_customer_savings_plan` where cust_id=:cust_id and plan_id=:pid";
+
+                    $planwaldb = $conn->connect();
+                    $plastmtss = $planwaldb->prepare($sqlupd);
+
+
+
+                    $plastmtss->bindParam(":cust_id", $customerId, PDO::PARAM_STR);
+                    $plastmtss->bindParam(":pid", $planId, PDO::PARAM_STR);
+
+                    $plastmtss->execute();
+
+                    $redtmt = $plastmtss->fetch();
+
+                    $next_charge_date = $redtmt['next_charge_date'];
+
+                    $last_charge_date = $redtmt['last_charge_date'];
+
+                    $last_charge_plus1day = date('Y-m-d', strtotime($last_charge_date . " +1 days"));
+                    $today = date("Y-m-d");
+                    $sqsa = "SELECT * FROM `mosave_savingtransaction` WHERE customerId=:cid and planId=:pid and transType='S' AND `transDate` BETWEEN '$last_charge_plus1day' AND '$today'";
+       
+        $sdss = $dbs->prepare($sqsa);  
+        $sdss->bindParam("cid", $customerId);
+        $sdss->bindParam("pid", $planId);
+        
+                $sdss->execute();
+                $resultbss = $sdss->fetch();
+
+
+
+
+
+
+
+
+
+
+                    $walletqry = "SELECT `available_bal` as wBalance, `account_bal`  FROM `mosave_plan_wallet` WHERE  customerId=:custid and accountId=:actid and plan_id=:pid ";
+
+                    $waldb = $conn->connect();
+                    $walstmt = $waldb->prepare($walletqry);
+
+                    $walstmt->bindParam(":custid", $customerId, PDO::PARAM_STR);
+                    $walstmt->bindParam(":actid", $accountId, PDO::PARAM_STR);
+                    $walstmt->bindParam(":pid", $planId, PDO::PARAM_STR);
+
+                    $walstmt->execute();
+                    $red = $walstmt->fetch();
+
+
+                    $wBalance = $red['wBalance'];
+                    $account_bal = $red['account_bal'];
+                    if ($wBalance == "") {
+                        //insert into wallet if account has no balance already
+                        $response['error'] = true;
+                        $response['message'] = "No balance in the account";
+                    } else {
+                        //update wallet if account has balance already
+
+                        //$wBalance=$red['wBalance']==""?0.00:$red['wBalance'];
+                        $amts = $transAmount;
+                        $amt = $transAmount * (-1);
+                        $newBalance = $wBalance + $amt;
+                        $newBalancecheck = $newBalance * (-1);
+
+                        $mosave_wal = $wallet_balances - $transAmount;
+                        $ac_bal = $account_bal - $transAmount;
+                        // $response['t']=$newBalancecheck;
+                        //$response['n']=$newBalance;
+                        //$response['j']=$bal;
+
+
+
+                        if ($amts > $wBalance) {
+
+                            $response['error'] = true;
+                            $response['message'] = "Insufficient funds";
+                        } elseif (($sdss->rowCount() != 0) && $wBalance == $transAmount) {
+
+
+                            $response['error'] = true;
+                            $response['message'] = "customer can not withdraw total amount, " . $money_commission . " monthly commission needs to be deducted";
+                        }
+
+                        // elseif($newBalance<$bal || $newBalancecheck>$bal  ){ 
+
+                        //      $response['error']=true;
+                        //     $response['message']="Minimum account balance cannot be withdrawn";
+                        //   }
+
+                        else {
+
+                            $available_bal = $newBalance - $bal;
+
+                            //do Paystack transfer to bank
+                            $transferResult=paystackTransferToBank($transAmount,$bank_details);
+                             $t=json_decode($transferResult);
+           
+           
+           $transfer_code=$t->data->transfer_code;
+                    $amtInKobo=$t->data->amount;
+                    $transAmount= $amtInKobo/100;
+                    $status=$t->data->status;
+                   $refs=$t->data->reference;
+                   $reason=$t->data->reason; 
+                  
+                  
+ if($status!== "received" ){
+     
+      //$user->id = $db->lastInsertId();
+                    $dbs = null;
+                    $db = null;
+                   $res->getBody()->write(json_encode($t));
+            return $res
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(200);
+                
+ }else{
+
+     //Insert into transfer table
+    $sqltransfer = "INSERT INTO `mosave_banktransfer`(`customerId`, `accountName`, `accountNo`, `bank`, 
+    `transAmount`, `transType`, `transref`, `status`, `des`, `createdDate`,  `time`, `ip`)
+     VALUES (:customerId,:acct_name,:accountNo,:bank_name, :transAmount,:transtype,:transref,
+     :stat, :descr,:datecreated,:time,:ip)";
+
+$status='Pending';
+$stmttransfer = $db->prepare($sqltransfer);
+
+$stmttransfer->bindParam(":customerId", $customerId, PDO::PARAM_STR);
+
+$stmttransfer->bindParam(":acct_name", $bank_account_name, PDO::PARAM_STR);
+$stmttransfer->bindParam(":accountNo", $bank_account_no, PDO::PARAM_STR);
+$stmttransfer->bindParam(":bank_name", $bank_name, PDO::PARAM_STR);
+$stmttransfer->bindParam(":transAmount", $transAmount, PDO::PARAM_STR);
+$stmttransfer->bindParam(":transtype", $customerId, PDO::PARAM_STR);
+$stmttransfer->bindParam(":transref", $refs, PDO::PARAM_STR);
+$stmttransfer->bindParam(":stat", $status, PDO::PARAM_STR);
+$stmttransfer->bindParam(":descr", $reason, PDO::PARAM_STR);
+
+$stmttransfer->bindParam(":datecreated", $dateCreated, PDO::PARAM_STR);
+$stmttransfer->bindParam(":time", $time, PDO::PARAM_STR);
+$stmttransfer->bindParam(":ip", $ip, PDO::PARAM_STR);
+$stmttransfer->execute();
+                            $updwalqryplan = "UPDATE `mosave_plan_wallet` SET `account_bal`=:ac_bal, `available_bal`=:newb  WHERE accountId=:actid and customerId=:custid and plan_id=:pid ";
+                            $waldbs = $conn->connect();
+                            $walstmtplan = $waldbs->prepare($updwalqryplan);
+                            $walstmtplan->bindParam(":ac_bal", $ac_bal, PDO::PARAM_STR);
+                            $walstmtplan->bindParam(":newb", $newBalance, PDO::PARAM_STR);
+                            $walstmtplan->bindParam(":custid", $customerId, PDO::PARAM_STR);
+                            $walstmtplan->bindParam(":actid", $accountId, PDO::PARAM_STR);
+                            $walstmtplan->bindParam(":pid", $planId, PDO::PARAM_STR);
+
+                            $walstmtplan->execute();
+
+                            $updwalqry = "UPDATE `mosave_wallet` SET `account_bal`='$mosave_wal'  WHERE accountId=:actid and customerId=:custid ";
+                            $waldb = $conn->connect();
+                            $walstmt = $waldb->prepare($updwalqry);
+
+                            $walstmt->bindParam(":custid", $customerId, PDO::PARAM_STR);
+                            $walstmt->bindParam(":actid", $accountId, PDO::PARAM_STR);
+
+                            $walstmt->execute();
+
+                            $trans_mode = 'CW';
+
+
+                            $sql = "INSERT INTO `mosave_savingtransaction`(`customerId`, `agentId`,`accountId`, `planId`, `accountNo`, `transAmount`,`transType`,`transref`,
+                                `accountType`, `accountCode`,`trans_mode`,  `transDate`,`time`,`ip`) VALUES (:customerId,:agentId,:actids,:pid,:accountNo,:transAmount,:transtype,:transref,:accountType,:accountCode,:trans_mode,:datecreated,:time,:ip)";
+
+                            $db = $conn->connect();
+                            $stmt = $db->prepare($sql);
+
+                            $stmt->bindParam(":customerId", $customerId, PDO::PARAM_STR);
+                            $stmt->bindParam(":agentId", $agentId, PDO::PARAM_STR);
+                            $stmt->bindParam(":actids", $accountId, PDO::PARAM_STR);
+                            $stmt->bindParam(":pid", $planId, PDO::PARAM_STR);
+                            $stmt->bindParam(":accountNo", $accountNo, PDO::PARAM_STR);
+                            $stmt->bindParam(":transAmount", $transAmount, PDO::PARAM_STR);
+                            $stmt->bindParam(":transtype", $transtype, PDO::PARAM_STR);
+                            $stmt->bindParam(":transref", $refs, PDO::PARAM_STR);
+                            $stmt->bindParam(":trans_mode", $trans_mode, PDO::PARAM_STR);
+                            $stmt->bindParam(":accountType", $accountType, PDO::PARAM_STR);
+                            $stmt->bindParam(":accountCode", $accountCode, PDO::PARAM_STR);
+
+
+
+
+                            $stmt->bindParam(":datecreated", $dateCreated, PDO::PARAM_STR);
+                            $stmt->bindParam(":time", $time, PDO::PARAM_STR);
+                            $stmt->bindParam(":ip", $ip, PDO::PARAM_STR);
+
+                            //$stmt->execute();
+                            $result = $stmt->execute();
+                            //$result = $stmt->fetch();
+
+                            if ($result) {
+
+
+
+                                $response['error'] = false;
+                                $response['message'] = 'Withdrawal successful';
+                                $response['source'] = "Withdrawal";
+                                $response['agentId'] = $agentId;
+                                $response['customerId'] = $customerId;
+                                $response['transAmount'] = $transAmount;
+                                $response['trxref'] = $refs;
+                                $response['plan_name'] = $plan_name;
+                                $response['accountId'] = $accountId;
+                                $response['accountNo'] = $accountNo;
+                                $response['timestamp'] = $dateCreated;
+                                $response['time'] = $time;
+
+                                $sqlsa1 = "SELECT `sn`, `userId`, `BVN_num`, `firstName`, `mname`, `lastName`, `email`, `mobilenetwork` FROM `config_user` WHERE sn=:custid";
+
+                                $stmtb1 = $dbs->prepare($sqlsa1);
+                                $stmtb1->bindParam("custid", $customerId);
+
+                                $stmtb1->execute();
+                                $resultsa1 = $stmtb1->fetch();
+                                $phone = $resultsa1['userId'];
+                                $email = $resultsa1['email'];
+                                $name = $resultsa1['firstName'] . ' ' . $resultsa1['lastName'];
+
+                                $smsmsg     = 'Dear ' . $name . ', there is withdrawal on your account. MoSave Acct: ' . $accountNo . '\nPlan: ' . $plan_name . '\nAmt: ' . $transAmount . ' DR' . '\nNet Bal: ' . $newBalance . '';
+
+                                //$whatsappchk=sendWhatsApp($phone,$smsmsg);
+                                $smscheck = sendSMS($phone, $smsmsg);
+                                //$response['error']=$smscheck;
+                                //$response['message']=$e->getMessage();
+                                //echo json_encode($response);
+                                $note = "";
+                                $from    = "noreply@moloyal.com";
+                                $to      = $email;
+
+
+
+                                $msg1     = 'NGN ' . $transAmount . ' has been debited from your MoSave Account.<br>
+            
+                                    <br> <strong><u> Here is what you need to know: </u></strong><br>
+                                    Transaction Ref.	:  ' . $refs . '<br>
+                                    Account Number	:  ' . $accountNo . '<br>
+
+                                    Account Name	:	' . $name . '<br>
+                                    Plan Name	:	' . $plan_name . '<br>
+                                    Amount	:	NGN' . $transAmount . '<br>
+                                    Note	:	' . $note . '<br>
+                                    Value Date	:	' . $dateCreated . '<br>
+
+                                    Time of Transaction	:	' . $time . '<br>
+
+
+                                    The balance on this account as at  ' . $time . '  are as follows;<br>
+
+                                    Available Balance	:  NGN' . $newBalance . '<br>
+
+
+                                    ';
+
+                                $msg = '<tr>
+                                <td align="left" style="font-family: Open Sans, Helvetica, Arial, sans-serif; font-size: 16px; font-weight: 400; line-height: 24px; padding-top: 10px;">
+                                <h4 style="color:#000;"> Dear ' . $name . ',</h4>
+                                <p style="font-family: Open Sans, Helvetica, Arial, sans-serif; font-size: 14px; font-weight: 400; line-height: 24px; color: #000000; text-align: left;">
+     
+                                                
+                                ' . $msg1 . '
+
+                                </p>
+                                                        </td>
+                                                    </tr>';
+
+                                $subject = "MoLoyal Debit Transaction [ " . $transAmount . " ]";
+                                $type    = $name;
+
+                                $emailsent = sendEmail($from, $to, $msg, $subject, $type);
+                            } else {
+                                $response['error'] = true;
+                                $response['message'] = "There was an error contacting the server, please retry";
+                            }
+                        }
+                    }
+                        
+                    }
+                }
+            }
+                    //$user->id = $db->lastInsertId();
+                    $dbs = null;
+                    $db = null;
+                   $res->getBody()->write(json_encode($response));
+            return $res
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(200);
+
+
+        }catch (PDOException $e) {
+            $response['error']   = true;
+            $response['message'] = $e->getMessage();
+            $res->getBody()->write(json_encode($response));
+            return $res
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(500);
+        }
+    
+    }
+    
+
+    
+});
+
+//Customer Savings
+
+$app->post('/customer/savings', function (Request $req, Response $res) {
+
+    $response = array();
+    $conn = new Db();
+    $dbs = $conn->connect();
+
+
+    $jwt = null;
+    $authHeader = $_SERVER['HTTP_AUTHORIZATION'];
+
+    $arr = explode(" ",
+        $authHeader
+    );
+
+
+
+    $jwt = $arr[1];
+    $result = validateJWT($jwt);
+
+    if ($result['validate_flag'] != 1) {
+
+        $res->getBody()->write(json_encode($result));
+        return $res
+            ->withHeader('content-type', 'application/json')
+            ->withStatus(401);
+    } else {
+
+
+        try {
+
+
+            $email = $result['token_value']->data->email;
+            //echo $token_email;
+
+            $customerId = $result['token_value']->data->id;
+            //echo $token_id;
+
+            $token_userid = $result['token_value']->data->userId;
+            //echo $token_userid;
+
+            $data = $req->getParsedBody();
+            $planId = $data["planId"];
+
+            $transAmount = $data["transAmount"];
+            $accountId = $data["accountId"];
+           
+            $card_id = $data["paymentcard_id"];
+
+
+            if ($card_id == null || $card_id == '') {
+                $response['error']   = true;
+                $response['message'] = "id of paymentcard to charge is required";
+                $res->getBody()->write(json_encode($response));
+                return $res
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(401);
+            }
+
+            if ($planId == null || $planId == '') {
+                $response['error']   = true;
+                $response['message'] = "plan id is required";
+                $res->getBody()->write(json_encode($response));
+                return $res
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(401);
+            }
+
+            if ($accountId == null || $accountId == '') {
+                $response['error']   = true;
+                $response['message'] = "account type id is required";
+
+                $res->getBody()->write(json_encode($response));
+                return $res
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(401);
+            }
+
+            
+            if ($transAmount == null || $transAmount == '') {
+                $response['error']   = true;
+                $response['message'] = "transaction amount is required";
+
+                $res->getBody()->write(json_encode($response));
+                return $res
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(401);
+            }
+
+
+            //$refs = getTransactionRef();
+            $transtype = 'S';
+
+
+            //  $customerId = 1;
+            // $agentId = '72';
+            // $transAmount = 2000;
+            //  $accountId = 1;
+            //   $accountNo=1540000058;
+            /*
+           
+         
+         
+           $accountId = $_POST['accountId']; */
+
+
+
+
+            //$passw = md5($request->password);
+            $work = str_pad(8, 2, '0', STR_PAD_LEFT);
+
+            $dateCreated = date("Y-m-d");
+
+            $time = date("H:i:s");
+            $date_time = $dateCreated . ' ' . $time;
+            $ip = $_SERVER['REMOTE_ADDR'];
+            $tt = '';
+            $wal_flag = '';
+
+            $admin_charge = 0;
+
+            $sqlsssa = "SELECT * FROM `savings_plan` WHERE sn=:pid";
+
+            $stmtbsss = $dbs->prepare($sqlsssa);
+            $stmtbsss->bindParam("pid", $planId);
+
+            $stmtbsss->execute();
+            $resultsass = $stmtbsss->fetch();
+            $plans_id = $resultsass['sn'];
+            $plan_name = $resultsass['plan_name'];
+            $plan_amount = $resultsass['plan_amount'];
+            $days = $resultsass['days'];
+            $percentage_commission = $resultsass['percentage_commission'];
+            $money_commission = $resultsass['flat_commision'];
+            $billing_type = $resultsass['billing_type'];
+
+
+
+            $sqlscust = "SELECT * FROM `config_customer_account_info` WHERE customerId=:custid";
+
+            $stmtcust = $dbs->prepare($sqlscust);
+            $stmtcust->bindParam("custid", $customerId);
+
+            $stmtcust->execute();
+            $resultcust = $stmtcust->fetch();
+            $accountNo = $resultcust['account_num'];
+            
+            
+
+            $sqlsngs = "SELECT * FROM `mosave_customer_savings_plan` WHERE cust_id=:cid and plan_id=:pid";
+
+            $stmtgs = $dbs->prepare($sqlsngs);
+            $stmtgs->bindParam("cid", $customerId);
+            $stmtgs->bindParam("pid", $planId);
+
+            $stmtgs->execute();
+            $resustmtgs = $stmtgs->fetch();
+            
+            if (!$resustmtgs) {
+                $response['error'] = true;
+                $response['message'] = "cannot find customer savings plan";
+                $res->getBody()->write(json_encode($response));
+                return $res
+                    ->withHeader('content-type', 'application/json')
+                    ->withStatus(403);
+            } else {
+
+                       
+
+                $maturity_date =  $resustmtgs['maturity_date'];
+                $savings_amount =  $resustmtgs['savings_amount'];
+                $savings_count =  $resustmtgs['savings_count'];
+                $charge_flag =  $resustmtgs['charge_flag'];
+                $savings_count_t = $savings_count;
+                $charge_flag_t = $charge_flag;
+                $sqlsa = "SELECT  `account_code`, `account_name`, `minimum_bal`, `desc` FROM `mosave_account_type` WHERE sn=:actid";
+
+                $stmtb = $dbs->prepare($sqlsa);
+                $stmtb->bindParam("actid", $accountId);
+
+                $stmtb->execute();
+                $resultsa = $stmtb->fetch();
+               
+                if (!$resultsa) {
+                    $response['error'] = true;
+                    $response['message'] = "Cannot find customer account type";
+                    $res->getBody()->write(json_encode($response));
+                    return $res
+                        ->withHeader('content-type', 'application/json')
+                        ->withStatus(403);
+                } else {
+
+                    $transAmountinKobo=$transAmount*100;
+                    //charge card with saving amount here
+                    $paymentresult= chargeSavedCard($card_id, $transAmountinKobo, $email);
+                   
+                    
+                     $t=json_decode($paymentresult);
+           
+           
+                    $amtInKobo=$t->data->amount;
+                    $transAmount= $amtInKobo/100;
+                    $status=$t->data->status;
+                   $refs=$t->data->reference;
+                   $gateresponse=$t->data->gateway_response;
+                   
+                    if($status=== "success" && $gateresponse=== "Approved" ){
+
+                        $accountCode = $resultsa['account_code'];
+                        $accountType = $resultsa['account_name'];
+                        $bal = $resultsa['minimum_bal'];
+    
+                        //Calcualate Admin commission from here
+                        if ($plans_id != 4)
+                        {
+                            if (($transAmount % $savings_amount) != 0) {
+    
+                                $response['error'] = true;
+                                $response['message'] = "payment must be in multiples of " . $savings_amount;
+                                $res->getBody()->write(json_encode($response));
+                                return $res
+                                    ->withHeader('content-type', 'application/json')
+                                    ->withStatus(403);
+                            } else {
+                                $savings_count_t = $savings_count;
+                                $charge_flag_t = $charge_flag;
+    
+    
+                                if ($savings_count == 0 && $charge_flag == 0) 
+                                {
+    
+                                    $sefss = " SELECT `sn`, `merchantName`, `merchantId`, `refer_amount`,`referral` FROM `mosave_settings` WHERE 1";
+                                    $sffss = $dbs->prepare($sefss);
+                                    $sffss->execute();
+                                    $resultsddd = $sffss->fetch();
+                                    $referral_amt = $resultsddd['refer_amount'];
+                                    $referral = $resultsddd['referral'];
+    
+    
+                                    if ($referral == '1') 
+                                    {
+                                        $totalairtime = $referral_amt;
+                                        $se = "SELECT * from multilevel where child_id='$customerId' and activated=0";
+                                        $sff = $dbs->prepare($se);
+                                        $sff->execute();
+                                        $results = $sff->fetch();
+                                        $child_id = $results['child_id'];
+                                        $parent_id = $results['parent_id'];
+                                        //e.g parent_id= 201500000243, child_id=201500000290
+                                        //       $response['child_id']=$child_id;
+                                        //       $response['parent_id']=$parent_id;
+                                        //   echo json_encode($response);
+                                        //   return;
+    
+    
+    
+                                        //if referral is available
+                                        if ($parent_id != '' && $child_id != '') {
+                                            $db5   =  $conn->connect();
+    
+                                            $sql5 = "SELECT  `userId`,`mobilenetwork`,`sn` FROM	 `config_user` 
+                                        WHERE `sn` =:usernos LIMIT 1";
+    
+                                            $stmt5 = $db5->prepare($sql5);
+                                            $stmt5->bindParam(":usernos", $parent_id, PDO::PARAM_STR);
+    
+                                            $stmt5->execute();
+                                            $result     = $stmt5->fetch();
+    
+                                            $parentPhoneno = $result['userId'];
+    
+                                            $mobilenetwork = $result['mobilenetwork'];
+    
+                                            sendAirtime($referral_amt, $parentPhoneno, $mobilenetwork);
+    
+                                            $sed = "UPDATE `multilevel` SET `activated`=1 where child_id='$customerId' ";
+                                            $sffd = $dbs->prepare($sed);
+                                            $sffd->execute();
+                                        }
+                                    }
+    
+                                    $wal_flag2 = 'check2';
+                                    $charge_flag = 0;
+                                    //$new_count=$transAmount / $savings_amount;
+    
+    
+                                    $savings_count = $transAmount / $savings_amount;
+    
+                                    $charge_type = '';
+                                    $d = strtotime("+1 Months");
+                                    $chargedt = date(
+                                        "Y-m-d",
+                                        $d
+                                    );
+                                    $dateCre = date("Y-m-d");
+    
+                                    $sqlupd = "UPDATE `mosave_customer_savings_plan` SET `savings_count`=:scount, `user_starting_date`=:startdate,`last_charge_date`=:lastchargedt,`next_charge_date`=:chargedt WHERE plan_id=:pid and cust_id=:cid";
+                                    $db =  $conn->connect();
+                                    $stmtupd = $db->prepare($sqlupd);
+    
+    
+                                    $stmtupd->bindParam(":scount", $savings_count, PDO::PARAM_STR);
+                                    $stmtupd->bindParam(":pid", $planId, PDO::PARAM_STR);
+                                    $stmtupd->bindParam(":cid", $customerId, PDO::PARAM_STR);
+                                    $stmtupd->bindParam(":lastchargedt", $dateCre, PDO::PARAM_STR);
+                                    $stmtupd->bindParam(":startdate", $dateCre, PDO::PARAM_STR);
+                                    $stmtupd->bindParam(":chargedt", $chargedt, PDO::PARAM_STR);
+    
+                                    $stmtupd->execute();
+                                } else {
+    
+    
+                                    $new_count = $transAmount / $savings_amount;
+    
+                                    //35=18+5
+                                    $savings_count = $savings_count + $new_count;
+    
+    
+                                    $sqlupd = "UPDATE `mosave_customer_savings_plan` SET `savings_count`=:scount WHERE plan_id=:pid and cust_id=:cid";
+                                    $db =  $conn->connect();
+                                    $stmtupd = $db->prepare($sqlupd);
+    
+    
+                                    $stmtupd->bindParam(":scount", $savings_count, PDO::PARAM_STR);
+                                    $stmtupd->bindParam(":pid", $planId, PDO::PARAM_STR);
+                                    $stmtupd->bindParam(":cid", $customerId, PDO::PARAM_STR);
+    
+                                    $stmtupd->execute();
+    
+                                    $k = $savings_count - ($charge_flag * $days);
+                                    // for ($j=0; $j<=$k; $j++){
+                                    //  $tt= $j % $days;
+    
+                                    // if($tt==1){
+    
+                                    //     $wal_flag='check';
+                                    // //increment charge_flag by 1
+                                    // $charge_flag=$charge_flag+1;
+    
+    
+                                    // $sqlupd = "UPDATE `mosave_customer_savings_plan` SET `charge_flag`=:cflag WHERE plan_id=:pid and cust_id=:cid";
+                                    // $db =  $conn->connect();
+                                    //         $stmtupd = $db->prepare($sqlupd);  
+    
+                                    //         $stmtupd->bindParam(":cflag", $charge_flag,PDO::PARAM_STR);
+    
+                                    //           $stmtupd->bindParam(":pid", $planId,PDO::PARAM_STR);
+                                    //         $stmtupd->bindParam(":cid", $customerId,PDO::PARAM_STR);
+    
+                                    // $stmtupd->execute();
+    
+    
+                                    // // do an insert into admin_ledger.admin_charge
+    
+    
+                                    //  //do an insert into admin_ledger.admin_charge
+                                    //  if($billing_type=='P'){
+                                    // $admin_charge= ($savings_amount * $days * $percentage_commission)/100;
+                                    // $charge_type='P';
+                                    // }
+                                    //  if($billing_type=='F'){
+                                    //   $admin_charge= $money_commission; 
+                                    //   $charge_type='F';
+                                    //  }
+    
+    
+                                    // $transtype='commission';
+                                    // $trans_mode='AC';
+    
+                                    // $sqla = "INSERT INTO `mosave_savingtransaction`(`customerId`, `agentId`,`accountId`,`planId`, `accountNo`, `transAmount`,`transType`,`transref`,
+                                    //                     `accountType`, `accountCode`,`trans_mode`,  `transDate`,`time`,`ip`) VALUES (:customerId,:agentId,:actids,:pid,:accountNo,:transAmount,:transtype,:transref,:accountType,:accountCode,:trans_mode,:datecreated,:time,:ip)";
+    
+                                    // $db =  $conn->connect();
+                                    //         $stmta = $db->prepare($sqla);  
+    
+                                    //         $stmta->bindParam(":customerId", $customerId,PDO::PARAM_STR);
+                                    //          $stmta->bindParam(":agentId", $agentId,PDO::PARAM_STR);
+                                    //           $stmta->bindParam(":actids", $accountId,PDO::PARAM_STR);
+                                    //           $stmta->bindParam(":pid", $planId,PDO::PARAM_STR);
+                                    //          $stmta->bindParam(":accountNo", $accountNo,PDO::PARAM_STR);
+                                    //          $stmta->bindParam(":transAmount", $admin_charge,PDO::PARAM_STR);
+                                    //           $stmta->bindParam(":transtype", $transtype,PDO::PARAM_STR);
+                                    //           $stmta->bindParam(":trans_mode", $trans_mode,PDO::PARAM_STR);
+                                    //           $stmta->bindParam(":transref", $refs,PDO::PARAM_STR);
+                                    //         $stmta->bindParam(":accountType", $accountType,PDO::PARAM_STR);
+                                    //          $stmta->bindParam(":accountCode", $accountCode,PDO::PARAM_STR);
+    
+    
+    
+    
+                                    //       $stmta->bindParam(":datecreated", $dateCreated,PDO::PARAM_STR);
+                                    //       $stmta->bindParam(":time", $time,PDO::PARAM_STR);
+                                    //       $stmta->bindParam(":ip", $ip,PDO::PARAM_STR);
+    
+                                    //                 //$stmt->execute();
+                                    //                 $resultas=$stmta->execute();
+    
+    
+                                    // $sqlwa="INSERT INTO `mosave_admin_ledger`( `plan_id`, `cust_id`, `admin_charge`, `date`, `charge_type`) VALUES (:pId,:cId,:adcharge,:datecreated,:charge_type)";
+    
+                                    // $db =  $conn->connect();
+                                    //         $stmtsqlwa = $db->prepare($sqlwa);  
+    
+                                    //         $stmtsqlwa->bindParam(":cId", $customerId,PDO::PARAM_STR);
+                                    //          $stmtsqlwa->bindParam(":pId", $planId,PDO::PARAM_STR);
+                                    //           $stmtsqlwa->bindParam(":adcharge", $admin_charge,PDO::PARAM_STR);
+                                    //           $stmtsqlwa->bindParam(":datecreated", $date_time,PDO::PARAM_STR);
+                                    //          $stmtsqlwa->bindParam(":charge_type", $charge_type,PDO::PARAM_STR);
+    
+    
+    
+    
+    
+    
+    
+                                    //                 //$stmt->execute();
+                                    //                 $resultsqf=$stmtsqlwa->execute(); 
+    
+                                    // }
+                                    // }
+    
+                                }
+                            }
+                        }
+    
+    
+                        if ($plans_id == 4) 
+                        {
+    
+                            // $savings_count_t=$savings_count;
+                            // $charge_flag_t=$charge_flag;
+    
+    
+                            if ($savings_count == 0 && $charge_flag == 0) 
+                            {
+    
+                                $sefss = " SELECT `sn`, `merchantName`, `merchantId`, `refer_amount`,`referral` FROM `mosave_settings` WHERE 1";
+                                $sffss = $dbs->prepare($sefss);
+                                $sffss->execute();
+                                $resultsddd = $sffss->fetch();
+                                $referral_amt = $resultsddd['refer_amount'];
+                                $referral = $resultsddd['referral'];
+    
+                                if ($referral == '1') {
+    
+    
+    
+    
+                                    $totalairtime = $referral_amt;
+                                    $se = "SELECT * from multilevel where child_id='$customerId' and activated=0";
+                                    $sff = $dbs->prepare($se);
+                                    $sff->execute();
+                                    $results = $sff->fetch();
+                                    $child_id = $results['child_id'];
+                                    $parent_id = $results['parent_id'];
+                                    //e.g parent_id= 201500000243, child_id=201500000290
+    
+                                    //if referral is available
+                                    if ($parent_id != '' && $child_id != '') 
+                                    {
+                                        $db5   =  $conn->connect();
+    
+                                        $sql5 = "SELECT  `userId`,`mobilenetwork`,`sn` FROM	 `config_user` 
+                                            WHERE `sn` =:usernos LIMIT 1";
+    
+                                        $stmt5 = $db5->prepare($sql5);
+                                        $stmt5->bindParam(":usernos", $parent_id, PDO::PARAM_STR);
+    
+                                        $stmt5->execute();
+                                        $result     = $stmt5->fetch();
+    
+                                        $parentPhoneno = $result['userId'];
+    
+                                        $mobilenetwork = $result['mobilenetwork'];
+    
+                                        sendAirtime($referral_amt, $parentPhoneno, $mobilenetwork);
+    
+    
+    
+    
+                                        $dateCreated = date("Y-m-d g:i:s");
+                                        $transtime = date("g:i:s");
+    
+                                        //$get_me2=mysqli_query($con,"INSERT INTO `airtime_manual_push`( `phoneno`, `network`, `transAmount`, `transref`, `comment`, `status`, `createdDate`, `transtime`) VALUES('$phoneno','$mobilenetwork','$amount','$ref','$totalairtime','S','$dateCreated','$transtime')");
+    
+                                        $sed = "UPDATE `multilevel` SET `activated`=1 where child_id='$customerId' ";
+                                        $sffd = $dbs->prepare($sed);
+                                        $sffd->execute();
+                                    }
+                                }
+    
+                                $wal_flag2 = 'check2';
+                                $charge_flag = 0;
+                                //$new_count=$transAmount / $savings_amount;
+    
+    
+                                $savings_count = 1;
+    
+                                $charge_type = '';
+    
+                                //  if($billing_type=='P'){
+                                //  //do an insert into admin_ledger.admin_charge
+                                // $admin_charge= ($transAmount * $percentage_commission)/100;
+                                // $charge_type='P';
+                                // }
+    
+                                //do an insert into admin_ledger.admin_charge
+                                // $admin_charge=  $money_commission;
+                                // $charge_type='F';
+    
+                                // $transtype='commission';
+                                // $trans_mode='AC';
+    
+                                // $sqla = "INSERT INTO `mosave_savingtransaction`(`customerId`, `agentId`,`accountId`,`planId`, `accountNo`, `transAmount`,`transType`,`transref`,
+                                //                     `accountType`, `accountCode`,`trans_mode`,  `transDate`,`time`,`ip`) VALUES (:customerId,:agentId,:actids,:pid,:accountNo,:transAmount,:transtype,:transref,:accountType,:accountCode,:trans_mode,:datecreated,:time,:ip)";
+    
+                                // $db =  $conn->connect();
+                                //         $stmta = $db->prepare($sqla);  
+    
+                                //         $stmta->bindParam(":customerId", $customerId,PDO::PARAM_STR);
+                                //          $stmta->bindParam(":agentId", $agentId,PDO::PARAM_STR);
+                                //           $stmta->bindParam(":actids", $accountId,PDO::PARAM_STR);
+                                //           $stmta->bindParam(":pid", $planId,PDO::PARAM_STR);
+                                //          $stmta->bindParam(":accountNo", $accountNo,PDO::PARAM_STR);
+                                //          $stmta->bindParam(":transAmount", $admin_charge,PDO::PARAM_STR);
+                                //           $stmta->bindParam(":transtype", $transtype,PDO::PARAM_STR);
+                                //           $stmta->bindParam(":trans_mode", $trans_mode,PDO::PARAM_STR);
+                                //           $stmta->bindParam(":transref", $refs,PDO::PARAM_STR);
+                                //         $stmta->bindParam(":accountType", $accountType,PDO::PARAM_STR);
+                                //          $stmta->bindParam(":accountCode", $accountCode,PDO::PARAM_STR);
+    
+    
+    
+    
+                                //       $stmta->bindParam(":datecreated", $dateCreated,PDO::PARAM_STR);
+                                //       $stmta->bindParam(":time", $time,PDO::PARAM_STR);
+                                //       $stmta->bindParam(":ip", $ip,PDO::PARAM_STR);
+    
+                                //                 //$stmt->execute();
+                                //                 $resultas=$stmta->execute();
+    
+                                // $sqlwa="INSERT INTO `mosave_admin_ledger`( `plan_id`, `cust_id`, `admin_charge`, `date`, `charge_type`) VALUES (:pId,:cId,:adcharge,:datecreated,:charge_type)";
+    
+                                // $db =  $conn->connect();
+                                //         $stmtsqlwa = $db->prepare($sqlwa);  
+    
+                                //         $stmtsqlwa->bindParam(":cId", $customerId,PDO::PARAM_STR);
+                                //          $stmtsqlwa->bindParam(":pId", $planId,PDO::PARAM_STR);
+                                //           $stmtsqlwa->bindParam(":adcharge", $admin_charge,PDO::PARAM_STR);
+                                //           $stmtsqlwa->bindParam(":datecreated", $date_time,PDO::PARAM_STR);
+                                //          $stmtsqlwa->bindParam(":charge_type", $charge_type,PDO::PARAM_STR);
+    
+                                // $resultsqf=$stmtsqlwa->execute(); 
+    
+                                $d = strtotime("+1 Months");
+                                $chargedt = date(
+                                        "Y-m-d",
+                                        $d
+                                    );
+                                $dateCre = date("Y-m-d");
+    
+                                $sqlupd = "UPDATE `mosave_customer_savings_plan` SET `savings_count`=:scount, `user_starting_date`=:startdate,`last_charge_date`=:lastchargedt,`next_charge_date`=:chargedt WHERE plan_id=:pid and cust_id=:cid";
+                                $db =  $conn->connect();
+                                $stmtupd = $db->prepare($sqlupd);
+    
+    
+                                $stmtupd->bindParam(":scount", $savings_count, PDO::PARAM_STR);
+                                $stmtupd->bindParam(":pid", $planId, PDO::PARAM_STR);
+                                $stmtupd->bindParam(":cid", $customerId, PDO::PARAM_STR);
+                                $stmtupd->bindParam(":startdate", $dateCre, PDO::PARAM_STR);
+                                $stmtupd->bindParam(":lastchargedt", $dateCre, PDO::PARAM_STR);
+                                $stmtupd->bindParam(":chargedt", $chargedt, PDO::PARAM_STR);
+    
+                                $stmtupd->execute();
+    
+                                // $sqlupd = "UPDATE `mosave_customer_savings_plan` SET `savings_count`=:scount,`charge_flag`=:cflag WHERE plan_id=:pid and cust_id=:cid";
+                                // $db =  $conn->connect();
+                                //         $stmtupd = $db->prepare($sqlupd);  
+    
+                                //         $stmtupd->bindParam(":cflag", $charge_flag,PDO::PARAM_STR);
+                                //          $stmtupd->bindParam(":scount", $savings_count,PDO::PARAM_STR);
+                                //           $stmtupd->bindParam(":pid", $planId,PDO::PARAM_STR);
+                                //         $stmtupd->bindParam(":cid", $customerId,PDO::PARAM_STR);
+    
+                                // $stmtupd->execute();
+    
+                            }
+                        }
+    
+    
+    
+    
+    
+    
+                        $walletqry = "SELECT account_bal as wBalance FROM `mosave_wallet` WHERE  customerId=:custid and accountId=:actid";
+    
+                        $waldb =  $conn->connect();
+                        $walstmt = $waldb->prepare($walletqry);
+    
+                        $walstmt->bindParam(":custid", $customerId, PDO::PARAM_STR);
+                        $walstmt->bindParam(":actid", $accountId, PDO::PARAM_STR);
+    
+                        $walstmt->execute();
+                        $red = $walstmt->fetch();
+    
+    
+                        $wBalance = $red['wBalance'];
+    
+                        //if(is_null($wBalance) || $wBalance==0)
+                        if ($walstmt->rowCount() == 0) 
+                        {
+    
+    
+                            //$test='lummy';
+                            //insert into wallet if account has no balance already
+                            $insewalqry = "INSERT INTO `mosave_wallet`( `agentId`, `accountId`,`accountNo`, `customerId`, `account_bal`) 
+                            VALUES  (:agentid,:actid,:accno,:custid,:amt)";
+                            $waldb =  $conn->connect();
+                            $walstmt1 = $waldb->prepare($insewalqry);
+                            $walstmt1->bindParam(":agentid", $agentId, PDO::PARAM_STR);
+                            $walstmt1->bindParam(":actid", $accountId, PDO::PARAM_STR);
+                            $walstmt1->bindParam(":accno", $accountNo, PDO::PARAM_STR);
+    
+                            $walstmt1->bindParam(":custid", $customerId, PDO::PARAM_STR);
+                            $walstmt1->bindParam(":amt", $transAmount, PDO::PARAM_STR);
+    
+                            $walstmt1->execute();
+                            $newBalance = $transAmount;
+                        } else {
+    
+                            // $response['sav']=yes;
+                            // $response['m']=$wBalance;
+                            //update wallet if account has balance already
+    
+                            //$wBalance=$red['wBalance']==""?0.00:$red['wBalance'];
+                            $newBalance = $wBalance + $transAmount;
+    
+                            $updwalqry = "UPDATE `mosave_wallet` SET `account_bal`=:newBalance  WHERE accountId=:actid and customerId=:custid ";
+                            $waldbs =  $conn->connect();
+                            $walstmt = $waldbs->prepare($updwalqry);
+    
+                            $walstmt->bindParam(":custid", $customerId, PDO::PARAM_STR);
+                            $walstmt->bindParam(":actid", $accountId, PDO::PARAM_STR);
+                            $walstmt->bindParam(":newBalance", $newBalance, PDO::PARAM_STR);
+    
+                            $walstmt->execute();
+                        }
+    
+    
+                        $planwalletqry = "SELECT `account_bal` as planwBalance, `available_bal` as planavailBalance FROM `mosave_plan_wallet` WHERE  customerId=:custid and plan_id=:pid  and accountId=:actid";
+    
+                        $planwaldb =  $conn->connect();
+                        $planwalstmt = $planwaldb->prepare($planwalletqry);
+    
+                        $planwalstmt->bindParam(":custid", $customerId, PDO::PARAM_STR);
+                        $planwalstmt->bindParam(":pid", $planId, PDO::PARAM_STR);
+                        $planwalstmt->bindParam(":actid", $accountId, PDO::PARAM_STR);
+    
+                        $planwalstmt->execute();
+                        $reds = $planwalstmt->fetch();
+    
+    
+                        $planwBalance = $reds['planwBalance'];
+                        $planavailBalance = $reds['planavailBalance'];
+                        if ($savings_count_t == 0 && $charge_flag_t == 0) {
+    
+    
+                            //      if($plans_id==4){
+                            //          $avail_bal=$transAmount;
+                            //      }else{
+                            //  $avail_bal=$transAmount-$admin_charge;
+                            //      }
+                        }
+                        if ($planwalstmt->rowCount() == 0) {
+                            $avail_bal = $transAmount;
+    
+                            //$test='lummy';
+                            //insert into wallet if account has no balance already
+                            $planinsewalqry = "INSERT INTO `mosave_plan_wallet`( `agentId`, `accountId`,`accountNo`, `customerId`,`plan_id`, `account_bal`,`available_bal`) 
+                                        VALUES  (:agentid,:actid,:accno,:custid,:pid,:amt,:avbal)";
+                            $planwaldb =  $conn->connect();
+                            $plnwalstmt1 = $planwaldb->prepare($planinsewalqry);
+                            $plnwalstmt1->bindParam(":agentid", $agentId, PDO::PARAM_STR);
+                            $plnwalstmt1->bindParam(":actid", $accountId, PDO::PARAM_STR);
+                            $plnwalstmt1->bindParam(":accno", $accountNo, PDO::PARAM_STR);
+                            $plnwalstmt1->bindParam(":pid", $planId, PDO::PARAM_STR);
+                            $plnwalstmt1->bindParam(":custid", $customerId, PDO::PARAM_STR);
+                            $plnwalstmt1->bindParam(":amt", $transAmount, PDO::PARAM_STR);
+                            $plnwalstmt1->bindParam(":avbal", $avail_bal, PDO::PARAM_STR);
+    
+                            $plnwalstmt1->execute();
+                            $plannewBalance = $transAmount;
+                        } else {
+    
+                            // $response['sav']=yes;
+                            // $response['m']=$wBalance;
+                            //update wallet if account has balance already
+    
+                            //$wBalance=$red['wBalance']==""?0.00:$red['wBalance'];
+                            $plannewBalance = $planwBalance + $transAmount;
+    
+    
+    
+                            $avail_bal = $planavailBalance + $transAmount;
+                            $updwalqry11 = "UPDATE `mosave_plan_wallet` SET `account_bal`=:newBalance,`available_bal`=:avbal  WHERE accountId=:actid and plan_id=:pid and  customerId=:custid ";
+                            $waldbs11 =  $conn->connect();
+                            $plnwalstmt1 = $waldbs11->prepare($updwalqry11);
+                            $plnwalstmt1->bindParam(":pid", $planId, PDO::PARAM_STR);
+                            $plnwalstmt1->bindParam(":custid", $customerId, PDO::PARAM_STR);
+                            $plnwalstmt1->bindParam(":actid", $accountId, PDO::PARAM_STR);
+                            $plnwalstmt1->bindParam(":newBalance", $plannewBalance, PDO::PARAM_STR);
+                            $plnwalstmt1->bindParam(":avbal", $avail_bal, PDO::PARAM_STR);
+    
+                            $plnwalstmt1->execute();
+                        }
+    
+    
+    
+    
+    
+    
+    
+                        //insert new $savings_count
+                        //insert incremented $charge_flag
+    
+    
+    
+    
+                        $transtype = 'S';
+                        $trans_mode = 'CS';
+    
+                        $sql = "INSERT INTO `mosave_savingtransaction`(`customerId`, `agentId`,`accountId`,`planId`, `accountNo`, `transAmount`,`transType`,`transref`,
+                              `accountType`, `accountCode`,`trans_mode`,  `transDate`,`time`,`ip`) VALUES (:customerId,:agentId,:actids,:pid,:accountNo,:transAmount,:transtype,:transref,:accountType,:accountCode,:trans_mode,:datecreated,:time,:ip)";
+    
+                        $db =  $conn->connect();
+                        $stmt = $db->prepare($sql);
+    
+                        $stmt->bindParam(":customerId", $customerId, PDO::PARAM_STR);
+                        $stmt->bindParam(":agentId", $agentId, PDO::PARAM_STR);
+                        $stmt->bindParam(":actids", $accountId, PDO::PARAM_STR);
+                        $stmt->bindParam(":pid", $planId, PDO::PARAM_STR);
+                        $stmt->bindParam(":accountNo", $accountNo, PDO::PARAM_STR);
+                        $stmt->bindParam(":transAmount", $transAmount, PDO::PARAM_STR);
+                        $stmt->bindParam(":transtype", $transtype, PDO::PARAM_STR);
+                        $stmt->bindParam(":trans_mode", $trans_mode, PDO::PARAM_STR);
+                        $stmt->bindParam(":transref", $refs, PDO::PARAM_STR);
+                        $stmt->bindParam(":accountType", $accountType, PDO::PARAM_STR);
+                        $stmt->bindParam(":accountCode", $accountCode, PDO::PARAM_STR);
+    
+    
+    
+    
+                        $stmt->bindParam(":datecreated", $dateCreated, PDO::PARAM_STR);
+                        $stmt->bindParam(":time", $time, PDO::PARAM_STR);
+                        $stmt->bindParam(":ip", $ip, PDO::PARAM_STR);
+    
+                        //$stmt->execute();
+                        $result = $stmt->execute();
+                        //$result = $stmt->fetch();
+    
+                        if ($result) 
+                        {
+    
+                            //Calculate loyalty based on Savings transaction
+    
+                            $getsettings = "SELECT * FROM `loyaltysettings` WHERE `setupName`='MoSave_Savings'";
+                            $ds1   =   $conn->connect();
+                            $sff1 = $ds1->prepare($getsettings);
+                            $sff1->execute();
+                            $resw = $sff1->fetch();
+                            $referpoint = $resw['referpoint'];
+                            $redemption_ratio = $resw['redemption_ratio'];
+                            $accrue_ratio = $resw['accural_ratio'];
+                            $min_airtime = $resw['min_airtime'];
+                            $submerchantId = $resw['submerchantId'];
+                            $merchantId = $resw['merchantId'];
+    
+    
+                            //calculate redemption value to benefit      
+                            $aredamt = $transAmount / $redemption_ratio;
+                            $nredamt = round($aredamt, 2);
+    
+                            //calculate accrual value       
+                            $aacramt = $transAmount / $accrue_ratio;
+                            $nacruamt = round($aacramt, 2);
+    
+    
+                            $qr = "SELECT * FROM `mosave_loyalty_wallet` WHERE customerId='$customerId' and submerchantId=$submerchantId";
+    
+                            $ds1sas   =   $conn->connect();
+                            $sff1sas = $ds1sas->prepare($qr);
+                            $sff1sas->execute();
+                            $re = $sff1sas->fetch();
+                            $s = $re['customerId'];
+                            $sredeemableamt = $re['redeemableamt'];
+                            $saccruedpoints = $re['accruedpoints'];
+    
+    
+                            $transtype = 'M';
+                            $refs = getTransactionRef();
+                            $trans_mode = 'CS';
+    
+                              $desc= $nredamt.' loyalty gift on '.$transAmount.' Savings';
+    
+    
+    
+                            if ($s != ''
+                            ) {
+                                //update
+    
+                                $nredamt = $nredamt + $sredeemableamt;
+                                $nacruamt = $nacruamt + $saccruedpoints;
+    
+                                $addpoint_qry = "UPDATE `mosave_loyalty_wallet` SET `accruedpoints`='$nacruamt',`redeemableamt`='$nredamt' where customerId='$customerId'and submerchantId=$submerchantId";
+                            } else {
+    
+    
+                                //insert
+                                $addpoint_qry = "INSERT INTO `mosave_loyalty_wallet`(`agentId`, `merchantId`, `submerchantId`, `customerId`,`accruedpoints`, `redeemableamt`, `comment`)
+                                              VALUES ('$agentId','$merchantId','$submerchantId','$customerId','$nacruamt','$nredamt', '$desc')";
+                            }
+    
+                            $dwsa   =   $conn->connect();
+                            $sf = $dwsa->prepare($addpoint_qry);
+                            $sf->execute();
+    
+                            $sql = "INSERT INTO `mosave_loyalty_transactions`(`customerId`, `agentId`, `transAmount`,
+                                    `transType`, `transref`, `des`, `transDate`,`time`,`ip`) 
+                                    VALUES (:customerId,:agentId,:redemptionAmount,:transtype,:transref,:des,:datecreated,:time,:ip)";
+    
+                            $db =  $conn->connect();
+                            $stmt = $db->prepare($sql);
+    
+                            $stmt->bindParam(":customerId", $customerId, PDO::PARAM_STR);
+                            $stmt->bindParam(":agentId", $agentId, PDO::PARAM_STR);
+                            $stmt->bindParam(":des", $desc, PDO::PARAM_STR);
+                            $stmt->bindParam(":redemptionAmount", $nredamt, PDO::PARAM_STR);
+                            $stmt->bindParam(":transtype", $transtype, PDO::PARAM_STR);
+                            $stmt->bindParam(":transref", $refs, PDO::PARAM_STR);
+    
+    
+    
+    
+                            $stmt->bindParam(":datecreated", $dateCreated, PDO::PARAM_STR);
+                            $stmt->bindParam(":time", $time, PDO::PARAM_STR);
+                            $stmt->bindParam(":ip", $ip, PDO::PARAM_STR);
+    
+                            //$stmt->execute();
+                            $result = $stmt->execute();
+    
+    
+                            $response['error'] = false;
+                            $response['message'] = " Successful ";
+                            $response['source'] = "Savings";
+                            $response['agentId'] = $agentId;
+                            $response['transAmount'] = $transAmount;
+                            $response['accountId'] = $accountId;
+                            $response['trxref'] = $refs;
+                            $response['plan_name'] = $plan_name;
+                            $response['accountNo'] = $accountNo;
+                            $response['timestamp'] = $dateCreated;
+                            $response['time'] = $time;
+    
+                            $sqlsa1 = "SELECT  `userId`, `BVN_num`, `firstName`, `mname`, `lastName`, `email`, `mobilenetwork` FROM `config_user` WHERE sn=:custid";
+    
+                            $stmtb1 = $dbs->prepare($sqlsa1);
+                            $stmtb1->bindParam("custid", $customerId);
+    
+                            $stmtb1->execute();
+                            $resultsa1 = $stmtb1->fetch();
+                            $phone = $resultsa1['userId'];
+                            $email = $resultsa1['email'];
+                            $fname = $resultsa1['firstName'];
+                            $name = $resultsa1['firstName'] . ' ' . $resultsa1['lastName'];
+    
+                            $smsmsg     = 'Dear ' . $fname . ', there is deposit on your MoSave account.  \nAcct: ' . $accountNo . '\nPlan: ' . $plan_name . '\nAmt: ' . $transAmount . ' CR' . '\nNet Bal: ' . $avail_bal . '';
+    
+                            //$whatsappchk=sendWhatsApp($phone,$smsmsg);
+                            $smscheck = sendSMS($phone, $smsmsg);
+                            //$response['error']=$smscheck;
+                            //$response['message']=$phone;
+                            //echo json_encode($response);
+                            $note = "";
+                            $from    = "noreply@moloyal.com";
+                            $to      = $email;
+                            $msg1     = 'NGN' . $transAmount .
+                                ' has been credited into your MoSave Account.<br>
+           
+                                        <br> <strong><u> Here is what you need to know: </u></strong><br>
+                                    Transaction Ref.	:' . $refs . '<br>
+                                    Account Number	:' . $accountNo . '<br>
+                                
+                                    Account Name	:	' . $name . '<br>
+                                    Plan Name	:	' . $plan_name . '<br>
+                                    Amount	:	NGN' . $transAmount . '<br>
+                                    Note	:	' . $note . '<br>
+                                    Value Date	:	' . $dateCreated . '<br>
+                                
+                                    Time of Transaction	:	' . $time . '<br>
+                                
+                                
+                                    The balance on this account as at  ' . $time . '  are as follows;<br>
+                                    Net Balance	:  NGN' . $avail_bal . '<br>
+                                
+                                
+                                    ';
+    
+                                        $msg = '<tr>
+                                            <td align="left" style="font-family: Open Sans, Helvetica, Arial, sans-serif; font-size: 16px; font-weight: 400; line-height: 24px; padding-top: 10px;">
+                                                    <h4 style="color:#000;"> Dear ' . $name . ',</h4>
+                                                <p style="font-family: Open Sans, Helvetica, Arial, sans-serif; font-size: 14px; font-weight: 400; line-height: 24px; color: #000000; text-align: left;">
+                        
+                                                
+                                ' . $msg1 . '
+                            
+                                </p>
+                                                    </td>
+                                                </tr>';
+    
+                                                $subject = "MoLoyal Credit Transaction [ " . $transAmount . " ]";
+                                        $type    = $name;
+    
+                                $emailsent = sendEmail($from, $to, $msg, $subject, $type);
+                        } else {
+                                $response['error'] = true;
+                                $response['message'] = "There was an error contacting the server, please retry";
+                        }
+
+                               
+                    
+                    }else{
+                        
+                        $response['error'] = true;
+                                $response['message'] = "Card charge payment not successful, please retry"; 
+                        
+                    }
+
+                     $res->getBody()->write(json_encode($response));
+                                    return $res
+                                ->withHeader('content-type', 'application/json')
+                                ->withStatus(200);    
+                }
+            }
+            //$user->id = $db->lastInsertId();
+
+           
+        } catch (PDOException $e) {
+            $response['error']   = true;
+            $response['message'] = $e->getMessage();
+            $res->getBody()->write(json_encode($response));
+            return $res
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(500);
+        }
+    }
+});
+
+
+
+//recurring card charge  with authorisation_code
+
+$app->post('/customer/recurringpaywithcard', function (Request $req, Response $res) {
+
+    $response = array();
+    $conn = new Db();
+    $db = $conn->connect();
+   
+
+    $jwt = null;
+    $authHeader = $_SERVER['HTTP_AUTHORIZATION'];
+
+    $arr = explode(" ", $authHeader);
+
+
+
+    $jwt = $arr[1];
+    $result = validateJWT($jwt);
+
+    if ($result['validate_flag'] != 1) {
+       
+        $res->getBody()->write(json_encode($result));
+            return $res
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(401);
+    } else {
+        
+    
+          try {
+
+            
+            $token_email = $result['token_value']->data->email;
+            //echo $token_email;
+
+            $token_id = $result['token_value']->data->id;
+            //echo $token_id;
+
+            $token_userid = $result['token_value']->data->userId;
+            //echo $token_userid;
+
+            $data = $req->getParsedBody();
+            $amount = $data["amount"];
+           
+            $card_id = $data["card_id"];
+            
+            $sqlv = "SELECT * FROM `recurring_payment` WHERE `email_address`=:email and `serial_number`=:card_id";
+            $stmta = $db->prepare($sqlv);
+            $stmta->bindParam(":email", $token_email, PDO::PARAM_STR);
+            $stmta->bindParam(":card_id", $card_id, PDO::PARAM_STR);
+        
+           
+              $rra= $stmta->execute();
+        
+              $resultsa = $stmta->fetch();
+              $num = $stmta->rowCount();
+              $authcode=$resultsa['authorization_code'];
+              $email=$resultsa['email_address'];
+              $reference=$resultsa['reference'];
+              $authcode=$resultsa['authorization_code'];
+              $authcode=$resultsa['authorization_code'];
+
+
+ $paystack_secret_key = $_ENV['PAYSTACK_SECRET_KEY'];
+            //get authorization_code, email from recurring_payment table for the same customer
+            $chargedata = array(
+                'authorization_code' => $authcode,
+                'email' => $email,
+                 'reference' => $reference,
+                'amount' => $amount
+                );
+        
+          
+        
+        
+        
+
+
+            $payload = json_encode($chargedata);
+            $ch = curl_init('https://api.paystack.co/transaction/charge_authorization');
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, array(
+            'accept: application/json',
+            "authorization: Bearer $paystack_secret_key",
+           //'authorization: Bearer sk_test_feeb3d34498e46330086fe2a73b02692a05adda5',
+            'cache-control: no-cache',
+            'content-type: application/json',
+            'content-length: ' . strlen($payload))
+             );
+        
+            $result = curl_exec($ch);
+            
+           $t=json_decode($result);
+           
+           
+            $stat=$t->data->status;
+           $txref=$t->data->reference;
+           $gateresponse=$t->data->gateway_response;
+
+
+
+        } catch (PDOException $e) {
+            $response['error']   = true;
+            $response['message'] = $e->getMessage();
+            $res->getBody()->write(json_encode($response));
+            return $res
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(500);
+        }
+    }
+});
+
+//Setup customer autosave
+$app->post('/customer/setup_autosave', function (Request $req, Response $res) {
+    
+
+    $conn = new Db();
+    $db = $conn->connect();
+
+    $response   = array();
+    $lastResetDate  = date('Y-m-d H:i:s');
+    // $agentid       = $request->agentid;
+    // $pin      = $request->pin;
+
+    $data = $req->getParsedBody();
+    $amount = $data["amount"];
+    $frequency = $data["frequency"];
+    $startDate = $data["startDate"];
+    $endDate = $data["endDate"];
+    $time = $data["time"];
+    $fundSource = $data["fundSource"];
+    $timeline = $data["timeline"];
+    $xter_rand=alphabeth_random();
+        $jwt = null;
+        $authHeader = $_SERVER['HTTP_AUTHORIZATION'];
+
+        $arr = explode(" ", $authHeader);
+
+
+
+        $jwt = $arr[1];
+        $result = validateJWT($jwt);
+
+        if ($result['validate_flag'] == 1) {
+
+
+
+            /*
+     $customerid='08090963549';
+     
+      $pin =2345;
+     */
+            try {
+
+                $token_email = $result['token_value']->data->email;
+                //echo $token_email;
+
+                $token_id = $result['token_value']->data->id;
+                //echo $token_id;
+
+                $token_userid = $result['token_value']->data->userId;
+                //echo $token_userid;
+                $dateCreated = date("Y-m-d H:i:s");
+
+
+
+               
+                $updateUserquery = "INSERT INTO `config_autosave`(`customer_id`, 
+                 `plan_id`,`amount`, `frequency`, `startDate`, `endDate`, `withdraw_time`,
+                 `withdraw_source`, `timeline`, `status`,`dateCreated`) 
+               VALUES (:custid,:xter_rand, :amt,:frequency,:startDate,
+               :endDate,:wtime,:fundsrc,:timeline,1,:datecreated)";
+                // $updateUser =  mysqli_query($con, $updateUserquery);
+
+                $stmt = $db->prepare($updateUserquery);
+                $stmt->bindParam(":custid", $token_id);
+                $stmt->bindParam(":amt", $amount, PDO::PARAM_STR);
+                $stmt->bindParam(":frequency", $frequency, PDO::PARAM_STR);
+                $stmt->bindParam(":startDate", $startDate, PDO::PARAM_STR);
+                $stmt->bindParam(":endDate", $endDate, PDO::PARAM_STR);
+                $stmt->bindParam(":wtime", $time, PDO::PARAM_STR);
+                $stmt->bindParam(":fundsrc", $fundSource, PDO::PARAM_STR);
+                $stmt->bindParam(":timeline", $timeline, PDO::PARAM_STR);
+                $stmt->bindParam(":datecreated", $dateCreated, PDO::PARAM_STR);
+                $stmt->bindParam(":xter_rand", $xter_rand, PDO::PARAM_STR);
+                
+
+                $result = $stmt->execute();
+
+                $errorInfo = $stmt->errorInfo();
+
+                if (isset($errorInfo[2])) {
+                    $response['error']   = true;
+                    $response['message'] = $errorInfo[2];
+                    $res->getBody()->write(json_encode($response));
+        return $res
+            ->withHeader('content-type', 'application/json')
+            ->withStatus(401);
+                }
+                if ($result) {
+
+                    $data = array(
+                        'plan_id' => $xter_rand,
+                        'amount' => $amount,
+                         'fundSource' => $fundSource,
+                         'frequency' => $frequency,
+
+                        'startDate' => $startDate
+                        );
+
+
+                    $response['error'] = false;
+        
+                    $response['message']='You have successfully created autosave.';
+                    $response['data'] = $data;
+                    $res->getBody()->write(json_encode($response));
+        return $res
+            ->withHeader('content-type', 'application/json')
+            ->withStatus(200);
+                }
+            } catch (PDOException $e) {
+                $response['error']   = true;
+                $response['message'] = $e->getMessage();
+                $res->getBody()->write(json_encode($response));
+        return $res
+            ->withHeader('content-type', 'application/json')
+            ->withStatus(500);
+            }
+        } else {
+            
+            $res->getBody()->write(json_encode($result));
+        return $res
+            ->withHeader('content-type', 'application/json')
+            ->withStatus(401);
+        }
+    
+});
+
+//Setup customer bank account
+$app->post('/customer/save_bankdetails', function (Request $req, Response $res) {
+    
+
+    $conn = new Db();
+    $db = $conn->connect();
+
+    $response   = array();
+    $lastResetDate  = date('Y-m-d H:i:s');
+    // $agentid       = $request->agentid;
+    // $pin      = $request->pin;
+
+    $data = $req->getParsedBody();
+    $account_name = $data["account_name"];
+    $account_no = $data["account_number"];
+    $bank_name = $data["bank_name"];
+    $bank_code = $data["bank_code"];
+    $currency = "NGN";
+    
+        $jwt = null;
+        $authHeader = $_SERVER['HTTP_AUTHORIZATION'];
+
+        $arr = explode(" ", $authHeader);
+
+
+
+        $jwt = $arr[1];
+        $result = validateJWT($jwt);
+
+        if ($result['validate_flag'] != 1) {
+            $res->getBody()->write(json_encode($result));
+            return $res
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(401);
+
+        } else {
+            
+         
+        
+
+            /*
+     $customerid='08090963549';
+     
+      $pin =2345;
+     */
+            try {
+
+                $token_email = $result['token_value']->data->email;
+                //echo $token_email;
+
+                $token_id = $result['token_value']->data->id;
+                //echo $token_id;
+
+                $token_userid = $result['token_value']->data->userId;
+                //echo $token_userid;
+                $dateCreated = date("Y-m-d H:i:s");
+
+
+
+               
+                $updateUserquery = "UPDATE `config_customer_account_info` SET `bank_code`=:bank_code,`bank_name`=:bank_name,`bank_account_no`=:account_no,`bank_account_name`=:acct_name,`currency`=:currency WHERE `customerId`=:custid";
+                // $updateUser =  mysqli_query($con, $updateUserquery);
+
+                $stmt = $db->prepare($updateUserquery);
+                $stmt->bindParam(":custid", $token_id);
+                $stmt->bindParam(":acct_name", $account_name);
+                $stmt->bindParam(":bank_name", $bank_name);
+                $stmt->bindParam(":bank_code", $bank_code);
+                $stmt->bindParam(":account_no", $account_no);
+                $stmt->bindParam(":currency", $currency);
+                
+
+                $result = $stmt->execute();
+
+                $errorInfo = $stmt->errorInfo();
+
+                if (isset($errorInfo[2])) {
+                    $response['error']   = true;
+                    $response['message'] = $errorInfo[2];
+                    $res->getBody()->write(json_encode($response));
+        return $res
+            ->withHeader('content-type', 'application/json')
+            ->withStatus(401);
+                }
+                if ($result) {
+
+                    //$data = array(
+                        // 'plan_id' => $xter_rand,
+                        // 'amount' => $amount,
+                        //  'fundSource' => $fundSource,
+                        //  'frequency' => $frequency,
+
+                        // 'startDate' => $startDate
+                        // );
+
+
+                    $response['error'] = false;
+        
+                    $response['message']='You have successfully created customer bank details';
+                    //$response['data'] = $data;
+                    $res->getBody()->write(json_encode($response));
+        return $res
+            ->withHeader('content-type', 'application/json')
+            ->withStatus(200);
+                }
+            } catch (PDOException $e) {
+                $response['error']   =true;
+                $response['message'] = $e->getMessage();
+                $res->getBody()->write(json_encode($response));
+        return $res
+            ->withHeader('content-type', 'application/json')
+            ->withStatus(500);
+            }
+        }   
+    
+});
+
+
+
+
+
 // customer savings plan
 $app->get('/customer/saving_plans', function (Request $request, Response $response) {
 
@@ -2097,77 +4066,339 @@ $app->get('/customer/saving_plans', function (Request $request, Response $respon
 });
 
 
-//recurring card charge  with authorisation_code
 
-$app->post('/paystack/recuring_charge', function (Request $req, Response $res) {
-
-    $response = array();
-    $conn = new Db();
-    $db = $conn->connect();
-   
-    $data = $req->getParsedBody();
-    $amount = $data["amount"];
-   
-   
-
-    //get authorization_code, email from recurring_payment table for the same customer
-    $chargedata = array(
-        'authorization_code' => $card,
-        'email' => $email,
-         'reference' => $reference,
-        'amount' => $amount
-        );
+// customer withdraw history
+$app->get('/customer/withdrawhistory', function (Request $request, Response $response) {
 
   
+    $conn = new Db();
+    $db = $conn->connect();
+
+    $jwt = null;
+    $authHeader = $_SERVER['HTTP_AUTHORIZATION'];
+
+    //echo '<br><br>';
+    $arr = explode(" ", $authHeader);
 
 
 
+    $jwt = $arr[1];
+    $result = validateJWT($jwt);
 
-   
-    
-
+    if ($result['validate_flag'] == 1) {
         try {
 
+            $token_email = $result['token_value']->data->email;
+            //echo $token_email;
+
+            $token_id = $result['token_value']->data->id;
+            //echo $token_id;
+
+            $token_userid = $result['token_value']->data->userId;
             //echo $token_userid;
 
 
+            $sql = "SELECT ST.`customerId`, ST.`agentId`, ST.`accountId`, ST.`accountNo`, ST.`transAmount`, ST.`transType`, ST.`accountType`, ST.`accountCode`, ST.`status`, ST.`createdDate`, 
+            ST.`transDate`, ST.`time`, ST.`ip`,C.`sn`, C.`userId`, C.`BVN_num`, C.`firstName`, C.`mname`, C.`lastName`, C.`email`, C.`city`, C.`state`, C.`gender`
+            FROM `mosave_savingtransaction` ST JOIN `config_user` C 
+            ON ST.customerId=C.sn WHERE ST.transType='W' and ST.`customerId`=:custid order by ST.`createdDate` Desc  limit 50";
 
-            $payload = json_encode($chargedata);
-            $ch = curl_init('https://api.paystack.co/transaction/charge_authorization');
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($ch, CURLOPT_POST, true);
-            curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
-            curl_setopt($ch, CURLOPT_HTTPHEADER, array(
-            'accept: application/json',
-            'authorization: Bearer sk_live_283e8912e82f34b275a577b97659aec29bf778d1',
-           //'authorization: Bearer sk_test_feeb3d34498e46330086fe2a73b02692a05adda5',
-            'cache-control: no-cache',
-            'content-type: application/json',
-            'content-length: ' . strlen($payload))
-             );
-        
-            $result = curl_exec($ch);
+            $stmt = $db->prepare($sql);
+            $stmt->bindParam(":custid", $token_id, PDO::PARAM_STR);
+            $stmt->execute();
+            //$result = $stmt->fetch();
+            $result     = $stmt->fetchAll(PDO::FETCH_OBJ);
+             
+      if ($result) {
+          
+          
+         
             
-           $t=json_decode($result);
+        $response->getBody()->write(json_encode($result));
+        return $response
+            ->withHeader('content-type', 'application/json')
+            ->withStatus(200);
+       
+        
+   } else {
+       $response['error']   = true;
+       $response['message'] = "No Transactions";
+       $response->getBody()->write(json_encode($response));
+       return $response
+           ->withHeader('content-type', 'application/json')
+           ->withStatus(401);
+   }
+   
+            //$res = $stmt->fetchAll();
+            // echo json_encode($cust);
+
            
-           
-            $stat=$t->data->status;
-           $txref=$t->data->reference;
-           $gateresponse=$t->data->gateway_response;
-
-
-
         } catch (PDOException $e) {
-            $response['error']   = true;
-            $response['message'] = $e->getMessage();
-            $res->getBody()->write(json_encode($response));
-            return $res
+            $error = array(
+                "message" => $e->getMessage()
+            );
+
+            $response->getBody()->write(json_encode($error));
+            return $response
                 ->withHeader('content-type', 'application/json')
                 ->withStatus(500);
         }
-    
+    } else {
+        $response->getBody()->write(json_encode($result));
+        return $response
+            ->withHeader('content-type', 'application/json')
+            ->withStatus(500);
+    }
 });
 
+// customer savings history
+$app->get('/customer/savingshistory', function (Request $request, Response $response) {
+
+  
+    $conn = new Db();
+    $db = $conn->connect();
+
+    $jwt = null;
+    $authHeader = $_SERVER['HTTP_AUTHORIZATION'];
+
+    //echo '<br><br>';
+    $arr = explode(" ", $authHeader);
+
+
+
+    $jwt = $arr[1];
+    $result = validateJWT($jwt);
+
+    if ($result['validate_flag'] == 1) {
+        try {
+
+            $token_email = $result['token_value']->data->email;
+            //echo $token_email;
+
+            $token_id = $result['token_value']->data->id;
+            //echo $token_id;
+
+            $token_userid = $result['token_value']->data->userId;
+            //echo $token_userid;
+
+
+            $sql = "SELECT ST.`customerId`, ST.`agentId`, ST.`accountId`, ST.`accountNo`, ST.`transAmount`, ST.`transType`, ST.`accountType`, ST.`accountCode`, ST.`status`, ST.`createdDate`, 
+  ST.`transDate`, ST.`time`, ST.`ip`,C.`sn`, C.`userId`, C.`BVN_num`, C.`firstName`, C.`mname`, C.`lastName`, C.`email`, C.`city`, C.`state`, C.`gender`
+  FROM `mosave_savingtransaction` ST JOIN `config_user` C 
+  ON ST.customerId=C.sn WHERE ST.transType='S' and ST.`customerId`=:custid order by ST.`createdDate` Desc limit 50";
+
+            $stmt = $db->prepare($sql);
+            $stmt->bindParam(":custid", $token_id, PDO::PARAM_STR);
+            $stmt->execute();
+            //$result = $stmt->fetch();
+            $result     = $stmt->fetchAll(PDO::FETCH_OBJ);
+             
+      if ($result) {
+          
+      
+        $response->getBody()->write(json_encode($result));
+        return $response
+            ->withHeader('content-type', 'application/json')
+            ->withStatus(200);
+       
+        
+   } else {
+       $response['error']   = true;
+       $response['message'] = "No Transactions";
+       $response->getBody()->write(json_encode($response));
+       return $response
+           ->withHeader('content-type', 'application/json')
+           ->withStatus(401);
+   }
+   
+            //$res = $stmt->fetchAll();
+            // echo json_encode($cust);
+
+           
+        } catch (PDOException $e) {
+            $error = array(
+                "message" => $e->getMessage()
+            );
+
+            $response->getBody()->write(json_encode($error));
+            return $response
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(500);
+        }
+    } else {
+        $response->getBody()->write(json_encode($result));
+        return $response
+            ->withHeader('content-type', 'application/json')
+            ->withStatus(500);
+    }
+});
+
+// customer all transactions history
+$app->get('/customer/alltransactions', function (Request $request, Response $response) {
+
+  
+    $conn = new Db();
+    $db = $conn->connect();
+
+    $jwt = null;
+    $authHeader = $_SERVER['HTTP_AUTHORIZATION'];
+
+    //echo '<br><br>';
+    $arr = explode(" ", $authHeader);
+
+
+
+    $jwt = $arr[1];
+    $result = validateJWT($jwt);
+
+    if ($result['validate_flag'] == 1) {
+        try {
+
+            $token_email = $result['token_value']->data->email;
+            //echo $token_email;
+
+            $token_id = $result['token_value']->data->id;
+            //echo $token_id;
+
+            $token_userid = $result['token_value']->data->userId;
+            //echo $token_userid;
+
+
+            $sql = " SELECT ST.`customerId`, ST.`agentId`, ST.`planId`, ST.`accountId`, ST.`accountNo`, ST.`transAmount`, ST.`transref`,ST.`transType`, ST.`accountType`, ST.`accountCode`, ST.`status`, ST.`createdDate`, (SELECT J.`plan_name` FROM `savings_plan` J WHERE J.sn =ST.`planId`) as plan_name,
+                ST.`transDate`, ST.`time`, ST.`ip`,C.`sn`, C.`userId`, C.`BVN_num`, C.`firstName`, C.`mname`, C.`lastName`, C.`email`, C.`city`, C.`state`, C.`gender`
+                FROM `mosave_savingtransaction` ST JOIN `config_user` C 
+                ON ST.customerId=C.sn WHERE  ST.`customerId`=:custid order by ST.`createdDate` Desc limit 50";
+                
+            $stmt = $db->prepare($sql);
+            $stmt->bindParam(":custid", $token_id, PDO::PARAM_STR);
+            $stmt->execute();
+            //$result = $stmt->fetch();
+            $result     = $stmt->fetchAll(PDO::FETCH_OBJ);
+             
+      if ($result) {
+          
+      
+        $response->getBody()->write(json_encode($result));
+        return $response
+            ->withHeader('content-type', 'application/json')
+            ->withStatus(200);
+       
+        
+   } else {
+       $response['error']   = true;
+       $response['message'] = "No Transactions";
+       $response->getBody()->write(json_encode($response));
+       return $response
+           ->withHeader('content-type', 'application/json')
+           ->withStatus(401);
+   }
+   
+            //$res = $stmt->fetchAll();
+            // echo json_encode($cust);
+
+           
+        } catch (PDOException $e) {
+            $error = array(
+                "message" => $e->getMessage()
+            );
+
+            $response->getBody()->write(json_encode($error));
+            return $response
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(500);
+        }
+    } else {
+        $response->getBody()->write(json_encode($result));
+        return $response
+            ->withHeader('content-type', 'application/json')
+            ->withStatus(500);
+    }
+});
+
+// customer savings plan
+$app->get('/customer/payment_cards', function (Request $request, Response $response) {
+
+  
+    $conn = new Db();
+    $db = $conn->connect();
+
+    $jwt = null;
+    $authHeader = $_SERVER['HTTP_AUTHORIZATION'];
+
+    //echo '<br><br>';
+    $arr = explode(" ", $authHeader);
+
+
+
+    $jwt = $arr[1];
+    $result = validateJWT($jwt);
+
+    if ($result['validate_flag'] == 1) {
+        try {
+
+            $token_email = $result['token_value']->data->email;
+            //echo $token_email;
+
+            $token_id = $result['token_value']->data->id;
+            //echo $token_id;
+
+            $token_userid = $result['token_value']->data->userId;
+            //echo $token_userid;
+
+
+            $sql = "SELECT * FROM `recurring_payment` WHERE email_address=:email";
+
+            $stmt = $db->prepare($sql);
+            $stmt->bindParam(":email", $token_email, PDO::PARAM_STR);
+            $stmt->execute();
+            //$result = $stmt->fetch();
+ $cust   = array();
+            while ($results = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                //$result = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                $res['paymentcard_id'] = $results['serial_number'];
+                $res['account_name'] = $results['acct_name'];
+                $res['exp_month'] = $results['exp_month'];
+                $res['exp_year'] = $results['exp_year'];
+                $res['bank'] = $results['bank'];
+                $enc_last4 = $results['last4'];
+                $enc_card_type = $results['card_type'];
+
+                $res['card_type']=encrypt_decrypt('decrypt',$enc_card_type);
+                $res['last4']=encrypt_decrypt('decrypt',$enc_last4);
+                
+
+                
+               
+                array_push($cust, $res);
+            }
+            //$res = $stmt->fetchAll();
+            // echo json_encode($cust);
+    $data = array(
+                "data" => $cust
+            );
+
+            $response->getBody()->write(json_encode($data));
+            return $response
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(200);
+        } catch (PDOException $e) {
+            $error = array(
+                "message" => $e->getMessage()
+            );
+
+            $response->getBody()->write(json_encode($error));
+            return $response
+                ->withHeader('content-type', 'application/json')
+                ->withStatus(500);
+        }
+    } else {
+        $response->getBody()->write(json_encode($result));
+        return $response
+            ->withHeader('content-type', 'application/json')
+            ->withStatus(500);
+    }
+});
 
 //Functions
 
@@ -2352,13 +4583,13 @@ function sendEmail($from, $to, $msg, $subject, $type)
     $mail->CharSet = 'UTF-8';
     $mail->isSMTP();
     $mail->SMTPAuth   = true;
-    $mail->Host   = "premium42.web-hosting.com";
+    $mail->Host   = $_ENV['EMAIL_HOST'];
     $mail->Port       = 465;
 
     $mail->SMTPSecure = "ssl";
     //Sets SMTP authentication. Utilizes the Username and Password variables
-    $mail->Username = 'care@moloyal.com';          //Sets SMTP username
-    $mail->Password = 'Welcome@13#12';
+    $mail->Username = $_ENV['EMAIL_USERNAME'];        //Sets SMTP username
+    $mail->Password = $_ENV['EMAIL_PASSWORD'];
     //Sets SMTP password
 
 
@@ -2785,12 +5016,69 @@ function validateJWT($jwt)
     }
 }
 
+//Paystack Saved Card charge
+function chargeSavedCard($card_id, $amount, $email)
+{
+    
+     $paystack_secret_key = $_ENV['PAYSTACK_SECRET_KEY'];
+    $conn = new Db();
+    $db =  $conn->connect();
+            $sqlv = "SELECT * FROM `recurring_payment` WHERE `email_address`=:email and `serial_number`=:card_id";
+            $stmta = $db->prepare($sqlv);
+            $stmta->bindParam(":email", $email, PDO::PARAM_STR);
+            $stmta->bindParam(":card_id", $card_id, PDO::PARAM_STR);
+        
+           
+              $rra= $stmta->execute();
+        
+              $resultsa = $stmta->fetch();
+              $num = $stmta->rowCount();
+              $enc_authcode=$resultsa['authorization_code'];
+              $email=$resultsa['email_address'];
+              $authcode=encrypt_decrypt('decrypt',$enc_authcode);
+              $refs= getTransactionRef();
+           
+             
 
+
+            //get authorization_code, email from recurring_payment table for the same customer
+            $chargedata = array(
+                'authorization_code' => $authcode,
+                'email' => $email,
+                 'reference' => $refs,
+                'amount' => $amount
+                );
+        
+          
+            $payload = json_encode($chargedata);
+            $ch = curl_init('https://api.paystack.co/transaction/charge_authorization');
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, array(
+            "accept: application/json",  
+            "authorization: Bearer $paystack_secret_key",
+            'cache-control: no-cache',
+            'content-type: application/json',
+            'content-length: ' . strlen($payload))
+             );
+        
+            $result = curl_exec($ch);
+            
+            return $result;
+          
+
+}
+
+
+//Paystack Transfer To Bank
 function paystackTransferToBank($transAmount,$bank_details)
 {
+    
+    $paystack_secret_key = $_ENV['PAYSTACK_SECRET_KEY'];
     $refs= getTransactionRef();
         $curl = curl_init();
-    
+    $encodedbnkdetails=json_encode($bank_details);
     curl_setopt_array($curl, array(
       CURLOPT_URL => 'https://api.paystack.co/transferrecipient',
       CURLOPT_RETURNTRANSFER => true,
@@ -2800,9 +5088,10 @@ function paystackTransferToBank($transAmount,$bank_details)
       CURLOPT_FOLLOWLOCATION => true,
       CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
       CURLOPT_CUSTOMREQUEST => 'POST',
-      CURLOPT_POSTFIELDS =>json_encode($bank_details),
+      CURLOPT_POSTFIELDS =>$encodedbnkdetails,
       CURLOPT_HTTPHEADER => array(
-        'Authorization: Bearer sk_live_283e8912e82f34b275a577b97659aec29bf778d1',
+          "authorization: Bearer $paystack_secret_key",
+        //'Authorization: Bearer sk_live_283e8912e82f34b275a577b97659aec29bf778d1',
         'Accept: application/json',
         'Content-Type: text/plain',
        
@@ -2815,17 +5104,17 @@ function paystackTransferToBank($transAmount,$bank_details)
     $kks=json_decode($res1);
     $data=$kks->data;
     
-    $rec_code=$data->recipient_code;
-    $nairaamt=$transAmount*100;
+    $receipient_code=$data->recipient_code;
+    $koboamt=$transAmount*100;
     $random1=random();
     $random2=alphabeth_random();
     $rando=$random1.$random2;
      $pay_details['source']="balance";
-         $pay_details['amount']=$nairaamt;
+         $pay_details['amount']=$koboamt;
         $pay_details['reference']=$refs;
         
         $pay_details['reason']="Mosave Withdrawal";
-        $pay_details['recipient']=$rec_code;
+        $pay_details['recipient']=$receipient_code;
         
         
     // $pay_details='{ "source": "balance", 
@@ -2835,6 +5124,7 @@ function paystackTransferToBank($transAmount,$bank_details)
     //       "reason": "Holiday Flexing" 
     //     }';
     
+   $encodedpayment_details= json_encode($pay_details);
         $curls = curl_init();
     
     curl_setopt_array($curls, array(
@@ -2846,35 +5136,82 @@ function paystackTransferToBank($transAmount,$bank_details)
       CURLOPT_FOLLOWLOCATION => true,
       CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
       CURLOPT_CUSTOMREQUEST => 'POST',
-      CURLOPT_POSTFIELDS =>json_encode($pay_details),
+      CURLOPT_POSTFIELDS =>$encodedpayment_details,
       CURLOPT_HTTPHEADER => array(
-        //'Authorization: Bearer sk_live_283e8912e82f34b275a577b97659aec29bf778d1',
+        "Authorization: Bearer $paystack_secret_key",
         'Accept: application/json',
         'Content-Type: text/plain',
        
       ),
     ));
     
-    $res = curl_exec($curls);
+    $result = curl_exec($curls);
     
     curl_close($curls);
-    $kk=json_decode($res);
+    $decoded_result=json_decode($result);
         
       
         //echo json_encode($response);
-        $response['trans_mode']='BW';
-        $response['banktransfer_res']= $kk;
+        // $response['trans_mode']='BW';
+        // $response['banktransfer_res']= $kk;
         
-    return $response;
+    return $result;
 }
 
+function validateTransferToBankRequest($request)
+  {
+    // validation logic goes here
+    $conn = new Db();
+    $db =  $conn->connect();
 
+ $json_fields1 = json_decode($request);
+    $ref1= $json_fields1->reference;
+    
+     $json_event = $request[event];
+    $json_body = $request[data][details][body];
+    $ref= $json_body[reference];
+    
+    
+    
+    
+                    
+    // // $json_fields = json_decode($request)->data;
+    // // $ref= $json_fields->reference;
+        $amountInkobo= $json_body[amount];;
+        $amountInNaira=  $amountInkobo/100;
+
+
+    $stmta = $db->prepare("SELECT * FROM mosave_banktransfer where transref=:ref  ");
+         $stmta->bindParam(":ref", $ref,PDO::PARAM_STR);
+
+
+            $stmta->execute();
+            $results = $stmta->fetch();
+
+            $db_amt = intval($results['transAmount']);
+
+            if ($amountInNaira=== $db_amt){
+                $stmtas = $db->prepare("UPDATE `mosave_banktransfer` SET `status`='$json_event', `rg`='$amountInNaira' WHERE transref=:ref  ");
+                $stmtas->bindParam(":ref", $ref,PDO::PARAM_STR);
+       
+       
+                    $stmtas->execute();
+                  
+               
+                return true;  
+             }
+            
+            
+            
+
+    return false; // update line based on logic
+  }
 
 function encrypt_decrypt($action, $string) {
     $output = false;
     $encrypt_method = "AES-256-CBC";
-    $secret_key = 'Welcome12';
-    $secret_salt = 'AvanteCS12';
+    $secret_key = $_ENV['ENCRYPT_SECRET_KEY'];
+    $secret_salt = $_ENV['ENCRYPT_SALT'];
     // hash
     $key = hash('sha256', $secret_key);
     
