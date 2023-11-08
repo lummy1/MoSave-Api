@@ -152,12 +152,16 @@ $app->post('/customer/wallettransfer', function (Request $req, Response $res) {
     $db = $conn->connect();
     $data = $req->getParsedBody();
     $senderwallet = $data["senderwallet"]; //e.g LOY, SAV, TIC
-    $planId = $data["saving_plan_id"];
+    $planId = $data["saving_plan_id"];   // if SAV, then this is required
     $accountId = $data["saving_account_id"];   // if SAV, then this is required
     $receiverwallet = $data["receiverwallet"];  //e.g LOY, SAV, TIC
     $transAmount = $data["amount"];
-  
+    $date = date("Y-m-d");
 
+            $time = date("H:i:s");
+
+            $ip = $_SERVER['REMOTE_ADDR'];
+            $dateCreated = date("Y-m-d H:i:s");
     if($senderwallet === 'LOY' ){
 
         $walletName= "MoLoyal Wallet";
@@ -213,7 +217,7 @@ $app->post('/customer/wallettransfer', function (Request $req, Response $res) {
 
             if ($senderwallet === "SAV") {
 
-
+                $refs= getTransactionRef();
                 $sqlsa = "SELECT  `account_code`, `account_name`, `minimum_bal`, `desc` FROM `mosave_account_type` WHERE sn=:actid";
 
                 $stmtb = $db->prepare($sqlsa);
@@ -224,8 +228,12 @@ $app->post('/customer/wallettransfer', function (Request $req, Response $res) {
 
                 //$response=$email;
                 if (!$resultsa) {
-                    //$response['error']=true;
+                    $response['error']=true;
                     $response['message'] = "Cannot find Customer account type";
+                    $res->getBody()->write(json_encode($response));
+                    return $res
+                        ->withHeader('content-type', 'application/json')
+                        ->withStatus(401);
                 } else {
 
                     $accountCode = $resultsa['account_code'];
@@ -283,9 +291,9 @@ $app->post('/customer/wallettransfer', function (Request $req, Response $res) {
                         $response['error'] = true;
                         $response['message'] = "Insufficient funds";
                         $res->getBody()->write(json_encode($response));
-                        return $res
-                            ->withHeader('content-type', 'application/json')
-                            ->withStatus(500);
+                    return $res
+                        ->withHeader('content-type', 'application/json')
+                        ->withStatus(401);
                     }else{
                     $available_bal = $newBalance - $bal;
 
@@ -314,7 +322,7 @@ $app->post('/customer/wallettransfer', function (Request $req, Response $res) {
                     $desc = 'Transfer to '.$walletName;
 
                     $sql = "INSERT INTO `mosave_savingtransaction`(`customerId`, `agentId`,`accountId`, `planId`, `accountNo`, `transAmount`,`transType`,`transref`,`des`
-            `accountType`, `accountCode`,`trans_mode`,  `transDate`,`time`,`ip`) VALUES (:customerId,:agentId,:actids,:pid,:accountNo,:transAmount,:transtype,:transref,:des,:accountType,:accountCode,:trans_mode,:datecreated,:time,:ip)";
+                    `accountType`, `accountCode`,`trans_mode`, `createdDate`, `transDate`,`time`,`ip`) VALUES (:customerId,:agentId,:actids,:pid,:accountNo,:transAmount,:transtype,:transref,:des,:accountType,:accountCode,:trans_mode,:datecreated,:transdate,:time,:ip)";
 
 
                     $stmt = $db->prepare($sql);
@@ -336,17 +344,21 @@ $app->post('/customer/wallettransfer', function (Request $req, Response $res) {
 
 
                     $stmt->bindParam(":datecreated", $dateCreated, PDO::PARAM_STR);
+                    $stmt->bindParam(":transdate", $date, PDO::PARAM_STR);
+
                     $stmt->bindParam(":time", $time, PDO::PARAM_STR);
                     $stmt->bindParam(":ip", $ip, PDO::PARAM_STR);
 
                     //$stmt->execute();
                     $result = $stmt->execute();
                     //$result = $stmt->fetch();
+                    }
                 }
-            }
             }
 
             if ($senderwallet === "LOY") {
+
+                $refs= getTransactionRef();
                 $walletqrys = "SELECT `redeemableamt`  FROM `mosave_loyalty_wallet` WHERE  customerId=:custid ";
 
 
@@ -365,6 +377,10 @@ $app->post('/customer/wallettransfer', function (Request $req, Response $res) {
 
                     $response['error'] = true;
                     $response['message'] = "Insufficient funds";
+                    $res->getBody()->write(json_encode($response));
+                    return $res
+                        ->withHeader('content-type', 'application/json')
+                        ->withStatus(401);
                 }else{
                 $moloyal_bal = $redeemableamt - $transAmount;
                 $ac_bal = $account_bal - $transAmount;
@@ -381,32 +397,30 @@ $app->post('/customer/wallettransfer', function (Request $req, Response $res) {
                 $trans_mode = 'WT';
                 $desc = 'Transfer to '.$walletName;
 
-                $sql = "INSERT INTO `mosave_savingtransaction`(`customerId`, `agentId`,`accountId`, `planId`, `accountNo`, `transAmount`,`transType`,`transref`,`des`
-        `accountType`, `accountCode`,`trans_mode`,  `transDate`,`time`,`ip`) VALUES (:customerId,:agentId,:actids,:pid,:accountNo,:transAmount,:transtype,:transref,:des,:accountType,:accountCode,:trans_mode,:datecreated,:time,:ip)";
+                $sql = "INSERT INTO `mosave_loyalty_transactions`( `customerId`, `agentId`, 
+                `transAmount`, `transType`, `transref`, `des`, `transDate`, `createdDate`,  `time`, `ip`)
+                 VALUES (:customerId,:agentId,:transAmount,:transtype,:transref,:des,:transdate, :datecreated,:time,:ip)";
 
 
                 $stmt = $db->prepare($sql);
 
                 $stmt->bindParam(":customerId", $customerId, PDO::PARAM_STR);
                 $stmt->bindParam(":agentId", $agentId, PDO::PARAM_STR);
-                $stmt->bindParam(":actids", $accountId, PDO::PARAM_STR);
-                $stmt->bindParam(":pid", $planId, PDO::PARAM_STR);
-                $stmt->bindParam(":accountNo", $accountNo, PDO::PARAM_STR);
+               
                 $stmt->bindParam(":transAmount", $transAmount, PDO::PARAM_STR);
                 $stmt->bindParam(":transtype", $transtype, PDO::PARAM_STR);
                 $stmt->bindParam(":des", $desc, PDO::PARAM_STR);
                 $stmt->bindParam(":transref", $refs, PDO::PARAM_STR);
-                $stmt->bindParam(":trans_mode", $trans_mode, PDO::PARAM_STR);
-                $stmt->bindParam(":accountType", $accountType, PDO::PARAM_STR);
-                $stmt->bindParam(":accountCode", $accountCode, PDO::PARAM_STR);
+                
 
 
 
-
+              
                 $stmt->bindParam(":datecreated", $dateCreated, PDO::PARAM_STR);
+                $stmt->bindParam(":transdate", $date, PDO::PARAM_STR);
+
                 $stmt->bindParam(":time", $time, PDO::PARAM_STR);
                 $stmt->bindParam(":ip", $ip, PDO::PARAM_STR);
-
                 //$stmt->execute();
                 $result = $stmt->execute();
 
@@ -415,6 +429,82 @@ $app->post('/customer/wallettransfer', function (Request $req, Response $res) {
 
 
             }
+
+            if ($senderwallet === "TIC") {
+
+                $refs= getTransactionRef();
+                $walletqrys = "SELECT `redeemableamt`  FROM `mosave_loyalty_wallet` WHERE  customerId=:custid ";
+
+
+                $walstmts = $db->prepare($walletqrys);
+
+                $walstmts->bindParam(":custid", $customerId, PDO::PARAM_STR);
+               
+
+                $walstmts->execute();
+                $reds = $walstmts->fetch();
+
+
+                $redeemableamt = $reds['redeemableamt'];
+
+                if ($transAmount > $redeemableamt) {
+
+                    $response['error'] = true;
+                    $response['message'] = "Insufficient funds";
+                    $res->getBody()->write(json_encode($response));
+                    return $res
+                        ->withHeader('content-type', 'application/json')
+                        ->withStatus(401);
+                }else{
+                    $moloyal_bal = $redeemableamt - $transAmount;
+                    $ac_bal = $account_bal - $transAmount;
+                    
+                    $updwalqry = "UPDATE `mosave_loyalty_wallet` SET `redeemableamt`=:moloyal_bal  WHERE  customerId=:custid ";
+
+                    $walstmt = $db->prepare($updwalqry);
+
+                    $walstmt->bindParam(":custid", $customerId, PDO::PARAM_STR);
+                    $walstmt->bindParam(":moloyal_bal", $moloyal_bal, PDO::PARAM_STR);
+
+                    $walstmt->execute();
+
+                    $trans_mode = 'WT';
+                    $desc = 'Transfer to '.$walletName;
+
+                    $sql = "INSERT INTO `mosave_loyalty_transactions`( `customerId`, `agentId`, 
+                    `transAmount`, `transType`, `transref`, `des`, `transDate`, `createdDate`,  `time`, `ip`)
+                    VALUES (:customerId,:agentId,:transAmount,:transtype,:transref,:des,:transdate, :datecreated,:time,:ip)";
+
+
+                    $stmt = $db->prepare($sql);
+
+                    $stmt->bindParam(":customerId", $customerId, PDO::PARAM_STR);
+                    $stmt->bindParam(":agentId", $agentId, PDO::PARAM_STR);
+                
+                    $stmt->bindParam(":transAmount", $transAmount, PDO::PARAM_STR);
+                    $stmt->bindParam(":transtype", $transtype, PDO::PARAM_STR);
+                    $stmt->bindParam(":des", $desc, PDO::PARAM_STR);
+                    $stmt->bindParam(":transref", $refs, PDO::PARAM_STR);
+                    
+
+
+
+                
+                    $stmt->bindParam(":datecreated", $dateCreated, PDO::PARAM_STR);
+                    $stmt->bindParam(":transdate", $date, PDO::PARAM_STR);
+
+                    $stmt->bindParam(":time", $time, PDO::PARAM_STR);
+                    $stmt->bindParam(":ip", $ip, PDO::PARAM_STR);
+                    //$stmt->execute();
+                    $result = $stmt->execute();
+
+
+                } 
+
+
+            }
+
+
         } catch (PDOException $e) {
             $response['error']   = true;
             $response['message'] = $e->getMessage();
