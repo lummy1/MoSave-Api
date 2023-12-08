@@ -15,6 +15,11 @@ class ComposerStaticInitbb9aff67b47841b40e13263bfe55986b
     );
 
     public static $prefixLengthsPsr4 = array (
+        'T' => 
+        array (
+            'Tuupola\\Middleware\\' => 19,
+            'Tuupola\\Http\\Factory\\' => 21,
+        ),
         'S' => 
         array (
             'Symfony\\Polyfill\\Php80\\' => 23,
@@ -32,6 +37,10 @@ class ComposerStaticInitbb9aff67b47841b40e13263bfe55986b
             'Psr\\Container\\' => 14,
             'PhpOption\\' => 10,
             'PHPMailer\\PHPMailer\\' => 20,
+        ),
+        'N' => 
+        array (
+            'Neomerx\\Cors\\' => 13,
         ),
         'G' => 
         array (
@@ -54,6 +63,15 @@ class ComposerStaticInitbb9aff67b47841b40e13263bfe55986b
     );
 
     public static $prefixDirsPsr4 = array (
+        'Tuupola\\Middleware\\' => 
+        array (
+            0 => __DIR__ . '/..' . '/tuupola/callable-handler/src',
+            1 => __DIR__ . '/..' . '/tuupola/cors-middleware/src',
+        ),
+        'Tuupola\\Http\\Factory\\' => 
+        array (
+            0 => __DIR__ . '/..' . '/tuupola/http-factory/src',
+        ),
         'Symfony\\Polyfill\\Php80\\' => 
         array (
             0 => __DIR__ . '/..' . '/symfony/polyfill-php80',
@@ -103,6 +121,10 @@ class ComposerStaticInitbb9aff67b47841b40e13263bfe55986b
         'PHPMailer\\PHPMailer\\' => 
         array (
             0 => __DIR__ . '/..' . '/phpmailer/phpmailer/src',
+        ),
+        'Neomerx\\Cors\\' => 
+        array (
+            0 => __DIR__ . '/..' . '/neomerx/cors-psr7/src',
         ),
         'GrahamCampbell\\ResultType\\' => 
         array (

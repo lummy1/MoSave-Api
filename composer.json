@@ -5,7 +5,8 @@
         "selective/basepath": "^2.1",
         "firebase/php-jwt": "^6.4",
         "vlucas/phpdotenv": "^5.5",
-        "phpmailer/phpmailer": "^6.8"
+        "phpmailer/phpmailer": "^6.8",
+        "tuupola/cors-middleware": "^1.4"
     },
     "autoload": {
         "psr-4": {

@@ -319,7 +319,7 @@ $app->post('/customer/wallettransfer', function (Request $req, Response $res) {
                     $walstmt->execute();
 
                     $trans_mode = 'WT';
-                    $desc = 'Transfer to '.$walletName;
+                    $desc = 'Transfer to '.$rec_walletName;
 
                     $sql = "INSERT INTO `mosave_savingtransaction`(`customerId`, `agentId`,`accountId`, `planId`, `accountNo`, `transAmount`,`transType`,`transref`,`des`
                     `accountType`, `accountCode`,`trans_mode`, `createdDate`, `transDate`,`time`,`ip`) VALUES (:customerId,:agentId,:actids,:pid,:accountNo,:transAmount,:transtype,:transref,:des,:accountType,:accountCode,:trans_mode,:datecreated,:transdate,:time,:ip)";
@@ -393,13 +393,13 @@ $app->post('/customer/wallettransfer', function (Request $req, Response $res) {
                 $walstmt->bindParam(":moloyal_bal", $moloyal_bal, PDO::PARAM_STR);
 
                 $walstmt->execute();
-
+                $transtype = 'W';
                 $trans_mode = 'WT';
-                $desc = 'Transfer to '.$walletName;
+                $desc = 'Transfer to '.$rec_walletName;
 
                 $sql = "INSERT INTO `mosave_loyalty_transactions`( `customerId`, `agentId`, 
-                `transAmount`, `transType`, `transref`, `des`, `transDate`, `createdDate`,  `time`, `ip`)
-                 VALUES (:customerId,:agentId,:transAmount,:transtype,:transref,:des,:transdate, :datecreated,:time,:ip)";
+                `transAmount`, `transType`, `transref`,`trans_mode`, `des`, `transDate`, `createdDate`,  `time`, `ip`)
+                 VALUES (:customerId,:agentId,:transAmount,:transtype,:transref,:trans_mode, :des,:transdate, :datecreated,:time,:ip)";
 
 
                 $stmt = $db->prepare($sql);
@@ -409,6 +409,8 @@ $app->post('/customer/wallettransfer', function (Request $req, Response $res) {
                
                 $stmt->bindParam(":transAmount", $transAmount, PDO::PARAM_STR);
                 $stmt->bindParam(":transtype", $transtype, PDO::PARAM_STR);
+                
+                $stmt->bindParam(":trans_mode", $trans_mode, PDO::PARAM_STR);
                 $stmt->bindParam(":des", $desc, PDO::PARAM_STR);
                 $stmt->bindParam(":transref", $refs, PDO::PARAM_STR);
                 
@@ -433,7 +435,7 @@ $app->post('/customer/wallettransfer', function (Request $req, Response $res) {
             if ($senderwallet === "TIC") {
 
                 $refs= getTransactionRef();
-                $walletqrys = "SELECT `redeemableamt`  FROM `mosave_loyalty_wallet` WHERE  customerId=:custid ";
+                $walletqrys = "SELECT `topup_bal`, `available_bal` FROM `mosave_event_ticket_wallet` WHERE  customerId=:custid ";
 
 
                 $walstmts = $db->prepare($walletqrys);
@@ -445,9 +447,9 @@ $app->post('/customer/wallettransfer', function (Request $req, Response $res) {
                 $reds = $walstmts->fetch();
 
 
-                $redeemableamt = $reds['redeemableamt'];
+                $topup_bal = $reds['topup_bal'];
 
-                if ($transAmount > $redeemableamt) {
+                if ($transAmount > $topup_bal) {
 
                     $response['error'] = true;
                     $response['message'] = "Insufficient funds";
@@ -456,23 +458,24 @@ $app->post('/customer/wallettransfer', function (Request $req, Response $res) {
                         ->withHeader('content-type', 'application/json')
                         ->withStatus(401);
                 }else{
-                    $moloyal_bal = $redeemableamt - $transAmount;
+                    $ticketWallet_bal = $topup_bal - $transAmount;
                     $ac_bal = $account_bal - $transAmount;
                     
-                    $updwalqry = "UPDATE `mosave_loyalty_wallet` SET `redeemableamt`=:moloyal_bal  WHERE  customerId=:custid ";
+                    $updwalqry = "UPDATE `mosave_event_ticket_wallet` SET `topup_bal`=:ticketWallet_bal  WHERE  customerId=:custid ";
 
                     $walstmt = $db->prepare($updwalqry);
 
                     $walstmt->bindParam(":custid", $customerId, PDO::PARAM_STR);
-                    $walstmt->bindParam(":moloyal_bal", $moloyal_bal, PDO::PARAM_STR);
+                    $walstmt->bindParam(":ticketWallet_bal", $ticketWallet_bal, PDO::PARAM_STR);
 
                     $walstmt->execute();
 
                     $trans_mode = 'WT';
-                    $desc = 'Transfer to '.$walletName;
+                    $desc = 'Transfer to '.$rec_walletName;
 
-                    $sql = "INSERT INTO `mosave_loyalty_transactions`( `customerId`, `agentId`, 
-                    `transAmount`, `transType`, `transref`, `des`, `transDate`, `createdDate`,  `time`, `ip`)
+                    $sql = "INSERT INTO `mosave_ticket_wallet_transaction`(`customerId`, 
+                    `agentId`, `vendorId`, `eventId`, `accountId`, `accountNo`, `transAmount`, 
+                    `amt_before_disc`, `discount`, `transType`, `transref`, `channel`, `trans_mode`, `des`, `createdDate`, `transDate`, `time`, `ip`) 
                     VALUES (:customerId,:agentId,:transAmount,:transtype,:transref,:des,:transdate, :datecreated,:time,:ip)";
 
 
